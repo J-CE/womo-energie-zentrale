@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<!-- ============================================================
+     index.html — Womo Energy Core v5.0
+     Dashboard: BMS · MPPT · Schaltlogik · Logging · Parameter
+     Eingebettet in LittleFS, erreichbar via http://192.168.4.1
+     WLAN AP: GODMODULE (Passwort: BM-hy678)
+     ============================================================ -->
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e1418">
+<title>GODMODULE — Energy Core</title>
+<style>
+  :root{
+    --bg:#0e1418; --bg2:#0a0f12; --panel:#161f26; --panel2:#1c272f;
+    --line:#26333d; --line2:#33444f;
+    --txt:#e6edf3; --muted:#8b9aa6; --faint:#5c6b76;
+    --akku:#3fb8af; --pv:#f5a623; --netz:#7c8cf0;
+    --ok:#42c98a; --warn:#f5a623; --bad:#e5484d;
+    --mono:ui-monospace,"SF Mono","SFMono-Regular",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{background:radial-gradient(900px 500px at 80% -10%,#15222b 0%,transparent 60%),var(--bg);
+    color:var(--txt);font-family:var(--sans);font-size:15px;line-height:1.45;
+    -webkit-font-smoothing:antialiased;padding:0 0 40px;min-height:100vh}
+  .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+  header{position:sticky;top:0;z-index:20;
+    background:linear-gradient(180deg,rgba(14,20,24,.96),rgba(14,20,24,.82));
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:10px 16px}
+  .brand{display:flex;align-items:center;gap:12px}
+  .logo{width:34px;height:34px;border-radius:9px;flex:0 0 auto;
+    background:linear-gradient(135deg,var(--akku),var(--pv));display:grid;place-items:center;
+    font-weight:800;color:#0a0f12;font-size:18px;letter-spacing:-1px;box-shadow:0 0 0 1px var(--line2) inset}
+  .brand h1{font-size:15px;margin:0;font-weight:700;letter-spacing:.2px}
+  .brand .sub{font-size:11px;color:var(--faint);letter-spacing:.5px;text-transform:uppercase}
+  .pills{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}
+  .pill{font-size:11px;padding:3px 9px;border-radius:99px;border:1px solid var(--line2);
+    color:var(--muted);display:flex;align-items:center;gap:5px;white-space:nowrap}
+  .dot{width:7px;height:7px;border-radius:99px;background:var(--faint)}
+  .dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  .dot.off{background:var(--bad);box-shadow:0 0 8px var(--bad)}
+  .dot.warn{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+
+  nav.tabs{display:flex;gap:2px;margin-top:11px;background:var(--bg2);
+    border:1px solid var(--line);border-radius:11px;padding:3px}
+  nav.tabs button{flex:1;background:none;border:0;color:var(--muted);font:inherit;font-size:13px;
+    padding:8px 6px;border-radius:8px;cursor:pointer;font-weight:600;transition:.15s}
+  nav.tabs button.active{background:var(--panel2);color:var(--txt)}
+
+  main{max-width:1180px;margin:0 auto;padding:16px}
+  .view{display:none}.view.active{display:block}
+
+  .grid{display:grid;gap:14px;grid-template-columns:1fr}
+  @media(min-width:720px){.grid{grid-template-columns:1fr 1fr}}
+  @media(min-width:1080px){.grid{grid-template-columns:1fr 1fr}}
+  .card{background:linear-gradient(180deg,var(--panel),var(--panel2));
+    border:1px solid var(--line);border-radius:14px;padding:16px;position:relative;overflow:hidden}
+  .card::before{content:"";position:absolute;inset:0 0 auto 0;height:3px;background:var(--accent,var(--line2));opacity:.9}
+  .card.akku{--accent:var(--akku)} .card.pv{--accent:var(--pv)}
+  .card.netz{--accent:var(--netz)} .card.inv{--accent:var(--faint)}
+  .card.wide{grid-column:1/-1}
+  .ch{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px}
+  .ch h2{font-size:13px;margin:0;letter-spacing:1.2px;text-transform:uppercase;color:var(--muted)}
+  .ch .accent{color:var(--accent)} .ch .badge{font-size:11px;color:var(--faint)}
+
+  .hero{display:flex;align-items:center;gap:16px}
+  .big{font-family:var(--mono);font-variant-numeric:tabular-nums;font-weight:700;
+    font-size:clamp(34px,9vw,52px);line-height:.95;letter-spacing:-2px}
+  .big .u{font-size:.4em;color:var(--muted);font-weight:600;margin-left:4px;letter-spacing:0}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin-top:14px;font-size:13.5px}
+  .kv .k{color:var(--muted)} .kv .v{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+  .row3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}
+  .mini{background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:9px 10px}
+  .mini .l{font-size:10.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.6px}
+  .mini .n{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:17px;margin-top:3px}
+
+  .gauge{flex:0 0 auto;width:128px;height:84px;position:relative}
+  .gauge .lbl{position:absolute;left:0;right:0;bottom:-2px;text-align:center;font-size:10px;color:var(--faint);letter-spacing:.6px}
+
+  /* Zellspannungs-CSS entfernt v5.0 */
+
+  .chips{display:flex;flex-direction:column;gap:8px}
+  .actuator{display:flex;align-items:center;gap:11px;background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:11px 13px}
+  .sw{width:42px;height:24px;border-radius:99px;background:#2a3741;flex:0 0 auto;position:relative;transition:.25s;border:1px solid var(--line2)}
+  .sw::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:99px;background:#7c8a94;transition:.25s}
+  .sw.on{background:var(--accent,var(--ok))} .sw.on::after{left:20px;background:#0a0f12}
+  .actuator .meta{flex:1;min-width:0} .actuator .nm{font-weight:600;font-size:14px}
+  .actuator .rs{font-size:11.5px;color:var(--muted);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .actuator .db{font-size:11px;color:var(--faint);font-family:var(--mono)}
+
+  /* Alarm-CSS entfernt v5.0 */
+  .ok-tag{font-size:12px;color:var(--ok);font-weight:600}
+
+  .ctrlbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+  .seg{display:flex;background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:3px;flex-wrap:wrap}
+  .seg button{background:none;border:0;color:var(--muted);font:inherit;font-size:12.5px;padding:6px 11px;border-radius:6px;cursor:pointer;font-weight:600}
+  .seg button.active{background:var(--panel2);color:var(--txt)}
+  select.metric{background:var(--bg2);border:1px solid var(--line2);color:var(--txt);font:inherit;font-size:13px;font-weight:600;padding:7px 10px;border-radius:8px}
+  .curval{margin-left:auto;font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:15px}
+  #chartWrap,#sdChartWrap{position:relative;width:100%;height:320px}
+  #chart,#sdChart{width:100%;height:100%;display:block}
+
+  .sdlist{display:flex;flex-direction:column;gap:6px;max-height:230px;overflow:auto;margin-bottom:12px}
+  .sdfile{display:flex;justify-content:space-between;align-items:center;gap:10px;background:var(--bg2);
+    border:1px solid var(--line);border-radius:9px;padding:9px 12px;cursor:pointer;font-size:13.5px}
+  .sdfile:hover{border-color:var(--line2)} .sdfile.sel{border-color:var(--akku);background:#15242a}
+  .sdfile .fn{font-family:var(--mono)} .sdfile .sz{color:var(--faint);font-family:var(--mono);font-size:12px}
+
+  form.params{display:grid;gap:14px;grid-template-columns:1fr}
+  @media(min-width:680px){form.params{grid-template-columns:1fr 1fr}}
+  .field{background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:13px 14px}
+  .field label{display:block;font-weight:600;font-size:13.5px;margin-bottom:3px}
+  .field .hint{font-size:11.5px;color:var(--faint);margin-bottom:9px}
+  .field .ip{display:flex;align-items:center;gap:10px}
+  .field input{flex:1;background:var(--bg);border:1px solid var(--line2);color:var(--txt);font:inherit;
+    font-family:var(--mono);font-size:16px;padding:9px 11px;border-radius:8px;min-width:0}
+  .field input:focus{outline:2px solid var(--akku);outline-offset:-1px}
+  .field .unit{color:var(--muted);font-size:13px;font-family:var(--mono)}
+  .actions{grid-column:1/-1;display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:4px}
+  button.btn{font:inherit;font-weight:700;font-size:14px;padding:11px 20px;border-radius:10px;cursor:pointer;border:1px solid transparent}
+  button.btn.primary{background:var(--akku);color:#06120f;border-color:var(--akku)}
+  button.btn.ghost{background:transparent;color:var(--muted);border-color:var(--line2)}
+  button.btn.danger{background:transparent;color:#ff9aa0;border-color:rgba(229,72,77,.5)}
+  button.btn:disabled{opacity:.5;cursor:not-allowed}
+  #toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,80px);background:var(--panel2);
+    border:1px solid var(--line2);color:var(--txt);padding:11px 18px;border-radius:11px;font-size:14px;
+    font-weight:600;box-shadow:0 10px 30px rgba(0,0,0,.5);transition:transform .3s;z-index:50;max-width:90vw}
+  #toast.show{transform:translate(-50%,0)} #toast.bad{border-color:var(--bad);color:#ff9aa0} #toast.ok{border-color:var(--ok)}
+  .stale{filter:saturate(.4) opacity(.7)}
+  .foot{text-align:center;color:var(--faint);font-size:11.5px;margin-top:28px;font-family:var(--mono)}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="logo">G</div>
+    <div><h1>GODMODULE · Energy Core</h1><div class="sub">Womo Energy Core v5.0</div></div>
+  </div>
+  <div class="pills">
+    <span class="pill"><span id="dWs" class="dot"></span><span id="tWs">Verbinde…</span></span>
+    <span class="pill"><span id="tClock" class="num">--:--:--</span></span>
+    <span class="pill"><span id="dSd" class="dot"></span>SD</span>
+    <span class="pill">Puffer <span id="tBuf" class="num">–</span></span>
+    <span class="pill">Laufzeit <span id="tUp" class="num">–</span></span>
+  </div>
+  <nav class="tabs">
+    <button data-view="live" class="active">Live</button>
+    <button data-view="hist">Verlauf</button>
+    <button data-view="sys">System</button>
+    <button data-view="cfg">Einstellungen</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ============ LIVE ============ -->
+  <section id="live" class="view active">
+
+    <div class="grid">
+      <div class="card akku">
+        <div class="ch"><h2>Akku <span class="accent">·</span> BMS</h2><span class="badge num" id="bmsBadge">–</span></div>
+        <div class="hero">
+          <div class="gauge">
+            <svg viewBox="0 0 128 84" width="128" height="84" aria-hidden="true">
+              <path d="M14 78 A50 50 0 0 1 114 78" fill="none" stroke="#26333d" stroke-width="11" stroke-linecap="round"/>
+              <path id="socArc" d="M14 78 A50 50 0 0 1 114 78" fill="none" stroke="var(--akku)" stroke-width="11" stroke-linecap="round" stroke-dasharray="157" stroke-dashoffset="157"/>
+            </svg>
+            <div class="lbl">State of Charge</div>
+          </div>
+          <div><div class="big"><span id="soc">–</span><span class="u">%</span></div>
+            <div class="kv" style="margin-top:8px"><span class="k">Fluss</span><span class="v" id="flow">–</span></div></div>
+        </div>
+        <div class="row3">
+          <div class="mini"><div class="l">Spannung</div><div class="n"><span id="bV">–</span> V</div></div>
+          <div class="mini"><div class="l">Strom</div><div class="n"><span id="bI">–</span> A</div></div>
+          <div class="mini"><div class="l">Leistung</div><div class="n"><span id="bP">–</span> W</div></div>
+        </div>
+        <div class="kv">
+          <span class="k">Kapazität</span><span class="v"><span id="bRem">–</span> / <span id="bNom">–</span> Ah</span>
+          <span class="k">Zyklen</span><span class="v" id="bCyc">–</span>
+          <span class="k">Temp MOS / Gehäuse</span><span class="v"><span id="tMos">–</span> / <span id="tS1">–</span> °C</span>
+          <span class="k">Temp Zelle (→ MPPT)</span><span class="v"><span id="tS2">–</span> °C</span>
+        </div>
+      </div>
+
+      <div class="card pv">
+        <div class="ch"><h2>Solar <span class="accent">·</span> MPPT</h2><span class="badge num" id="mpptBadge">–</span></div>
+        <div class="hero"><div>
+          <div class="big" style="color:var(--pv)"><span id="ppv">–</span><span class="u">W</span></div>
+          <div class="kv" style="margin-top:8px"><span class="k">Zustand</span><span class="v" id="mState">–</span></div>
+        </div></div>
+        <div class="row3">
+          <div class="mini"><div class="l">Panel</div><div class="n"><span id="mVpv">–</span> V</div></div>
+          <div class="mini"><div class="l">Akku</div><div class="n"><span id="mV">–</span> V</div></div>
+          <div class="mini"><div class="l">Ladestrom</div><div class="n"><span id="mI">–</span> A</div></div>
+        </div>
+        <div class="kv">
+          <span class="k">Ertrag heute</span><span class="v"><span id="mYt">–</span> kWh</span>
+          <span class="k">Max-Leistung heute</span><span class="v"><span id="mYtot">–</span> W</span>
+          <span class="k">PV / Zustand</span><span class="v"><span id="mDev">–</span></span>
+        </div>
+      </div>
+
+      <div class="card wide">
+        <div class="ctrlbar">
+          <select class="metric" id="liveMetric"></select>
+          <div class="seg" id="liveRange">
+            <button data-w="30m" class="active">30 min</button>
+            <button data-w="2h">2 h</button>
+            <button data-w="6h">6 h</button>
+            <button data-w="24h">24 h</button>
+            <button data-w="48h">48 h</button>
+          </div>
+          <span class="curval" id="liveCur">–</span>
+        </div>
+        <div id="chartWrap"><canvas id="chart"></canvas></div>
+        <p style="color:var(--faint);font-size:11.5px;margin:12px 0 0">
+          Live-Graph aus dem RAM-Ringpuffer (48 h, 2-s-Takt). Große Fenster werden
+          dezimiert geladen. Zeitachse = relativ zu jetzt (kein RTC im System).
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ VERLAUF (SD) ============ -->
+  <section id="hist" class="view">
+    <div class="card wide">
+      <div class="ch"><h2>Verlauf <span class="accent">·</span> SD-Karte</h2><span class="badge" id="sdState">–</span></div>
+      <div class="sdlist" id="sdList"><span style="color:var(--faint);font-size:13px">Lade Dateiliste…</span></div>
+      <div class="ctrlbar">
+        <select class="metric" id="sdMetric">
+          <option value="soc">SoC %</option>
+          <option value="v">Spannung V</option>
+          <option value="i">Strom A</option>
+          <option value="ppv">PV-Leistung W</option>
+        </select>
+        <span class="curval" id="sdInfo">Keine Datei gewählt</span>
+      </div>
+      <div id="sdChartWrap"><canvas id="sdChart"></canvas></div>
+      <p style="color:var(--faint);font-size:11.5px;margin:12px 0 0">
+        CSV-Dateien von der SD (eine pro Boot-Tag), bis zu 2.000 Punkte je Anfrage.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ SYSTEM ============ -->
+  <section id="sys" class="view">
+    <div class="grid">
+      <div class="card netz">
+        <div class="ch"><h2>Aktoren <span class="accent">·</span> Logik</h2><span class="badge" id="landBadge">–</span></div>
+        <div class="chips">
+          <div class="actuator"><div class="sw" id="swD"></div>
+            <div class="meta"><div class="nm">D+ Relais · Kühlschrank</div><div class="rs" id="rsD">–</div></div><div class="db" id="dbD"></div></div>
+          <div class="actuator"><div class="sw" id="swG"></div>
+            <div class="meta"><div class="nm">Gel-Lader · Starterbatterie</div><div class="rs" id="rsG">–</div></div><div class="db" id="dbG"></div></div>
+          <div class="actuator"><div class="sw" id="swW"></div>
+            <div class="meta"><div class="nm">Wechselrichter · Remote</div><div class="rs" id="rsW">–</div></div><div class="db" id="dbW"></div></div>
+          <div class="actuator"><div class="sw" id="swL" style="--accent:var(--netz)"></div>
+            <div class="meta"><div class="nm">Landstrom (Sensor)</div><div class="rs">Eingang</div></div></div>
+        </div>
+      </div>
+
+      <div class="card inv">
+        <div class="ch"><h2>System-Status</h2><span class="badge">Diagnose</span></div>
+        <div class="kv">
+          <span class="k">Ringpuffer-Einträge</span><span class="v" id="sBuf">–</span>
+          <span class="k">SD-Karte</span><span class="v" id="sSd">–</span>
+          <span class="k">BMS Frames / Fehler</span><span class="v"><span id="sBfc">–</span> / <span id="sBec">–</span></span>
+          <span class="k">MPPT Frames</span><span class="v" id="sMfc">–</span>
+          <span class="k">Freier Heap</span><span class="v" id="sHeap">–</span>
+          <span class="k">Freier PSRAM</span><span class="v" id="sPsram">–</span>
+          <span class="k">RTC (DS3231)</span><span class="v" id="sRtc">–</span>
+          <span class="k">RTC-Drift (24 h)</span><span class="v" id="sDrift">–</span>
+          <span class="k">RTC-Temperatur</span><span class="v" id="sTemp">–</span>          
+          <span class="k">Laufzeit</span><span class="v" id="sUp">–</span>
+          <span class="k">Wechselrichter</span><span class="v" id="sInv">Stub</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ EINSTELLUNGEN ============ -->
+  <section id="cfg" class="view">
+    <div class="card wide">
+      <div class="ch"><h2>Schaltparameter</h2><span class="badge">in NVS gespeichert</span></div>
+      <form class="params" id="paramForm" autocomplete="off">
+        <div class="field"><label>D+ EIN ab SoC</label><div class="hint">Kühlschrank, wenn Akku voll genug (50–100 %).</div>
+          <div class="ip"><input type="number" name="socDPlusOn" min="50" max="100"><span class="unit">%</span></div></div>
+        <div class="field"><label>D+ AUS unter SoC</label><div class="hint">Harte Abschaltschwelle (20–99 %).</div>
+          <div class="ip"><input type="number" name="socDPlusOff" min="20" max="99"><span class="unit">%</span></div></div>
+        <div class="field"><label>D+ PV-AUS erst unter SoC</label><div class="hint">PV-Einbruch schaltet nur ab wenn SoC darunter (50–100 %).</div>
+          <div class="ip"><input type="number" name="socDPlusHigh" min="50" max="100"><span class="unit">%</span></div></div>
+        <div class="field"><label>Gel-Lader EIN ab SoC</label><div class="hint">Starterbatterie laden ab (50–100 %).</div>
+          <div class="ip"><input type="number" name="socGelOn" min="50" max="100"><span class="unit">%</span></div></div>
+        <div class="field"><label>Gel-Lader PV-AUS erst unter SoC</label><div class="hint">PV-Mindest-Check aktiv wenn SoC darunter (50–100 %).</div>
+          <div class="ip"><input type="number" name="socGelHigh" min="50" max="100"><span class="unit">%</span></div></div>
+        <div class="field"><label>Gel-Lader Mindest-PV</label><div class="hint">Nur laden bei genug Solar (0–500 W).</div>
+          <div class="ip"><input type="number" name="pvGelMinW" min="0" max="500"><span class="unit">W</span></div></div>
+        <div class="field"><label>WR EIN ab SoC</label><div class="hint">Wechselrichter einschalten ab (50–100 %).</div>
+          <div class="ip"><input type="number" name="socWROn" min="50" max="100"><span class="unit">%</span></div></div>
+        <div class="field"><label>WR AUS unter SoC</label><div class="hint">Wechselrichter ausschalten unter (20–99 %).</div>
+          <div class="ip"><input type="number" name="socWROff" min="20" max="99"><span class="unit">%</span></div></div>
+        <div class="field"><label>D+ PV-Überschuss EIN</label><div class="hint">PV-Schwelle für D+-Relais Einschalten (10–2000 W).</div>
+          <div class="ip"><input type="number" name="pvThresholdOn" min="10" max="2000"><span class="unit">W</span></div></div>
+        <div class="field"><label>D+ PV-Überschuss AUS</label><div class="hint">PV-Schwelle für weiches Ausschalten (0–1990 W).</div>
+          <div class="ip"><input type="number" name="pvThresholdOff" min="0" max="1990"><span class="unit">W</span></div></div>
+        <div class="field"><label>Flatter-Schutz</label><div class="hint">Stabile Zyklen vor Schaltung (1–60 × 2 s).</div>
+          <div class="ip"><input type="number" name="relayDebounceCycles" min="1" max="60"><span class="unit">Zyklen</span></div></div>
+        <div class="field"><label>SD-Schreibintervall</label><div class="hint">Batch-Intervall der Minutenwerte (1–60 min).</div>
+          <div class="ip"><input type="number" id="logMin" min="1" max="60"><span class="unit">min</span></div></div>
+        <div class="actions">
+          <button type="submit" class="btn primary" id="saveBtn">Speichern</button>
+          <button type="button" class="btn ghost" id="revertBtn">Verwerfen</button>
+          <span style="flex:1"></span>
+          <button type="button" class="btn danger" id="resetBtn">Werks-Reset</button>
+        </div>
+      </form>
+    </div>
+  </section>
+</main>
+
+<div id="toast"></div>
+<div class="foot">GODMODULE · Energy Core v5.0 · WLAN: GODMODULE · http://192.168.4.1 · offline · MEZ</div>
+
+<script>
+"use strict";
+const $=id=>document.getElementById(id);
+const fmt=(n,d=1)=>(n==null||isNaN(n))?"–":Number(n).toFixed(d);
+const intf=n=>(n==null||isNaN(n))?"–":Math.round(n).toLocaleString("de-DE");
+function uptime(s){if(s==null)return"–";const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return d?`${d}d ${h}h`:h?`${h}h ${m}m`:`${m}m`;}
+
+/* Tabs */
+document.querySelectorAll("nav.tabs button").forEach(b=>{b.onclick=()=>{
+  document.querySelectorAll("nav.tabs button").forEach(x=>x.classList.remove("active"));
+  document.querySelectorAll(".view").forEach(x=>x.classList.remove("active"));
+  b.classList.add("active");$(b.dataset.view).classList.add("active");
+  if(b.dataset.view==="live")loadLive();
+  if(b.dataset.view==="hist")loadSdFiles();
+  if(b.dataset.view==="cfg"&&!paramsLoaded)loadParams();
+};});
+
+let toastT;function toast(m,k=""){const t=$("toast");t.textContent=m;t.className="show "+k;clearTimeout(toastT);toastT=setTimeout(()=>t.className=t.className.replace("show",""),2600);}
+
+/* Verbindung */
+let ws,wsOk=false,pollTimer=null,lastData=0;
+function setConn(s){const d=$("dWs"),t=$("tWs");
+  if(s==="on"){d.className="dot on";t.textContent="WebSocket live";}
+  else if(s==="poll"){d.className="dot warn";t.textContent="Polling";}
+  else{d.className="dot off";t.textContent="Getrennt";}}
+function connectWS(){try{ws=new WebSocket(`ws://${location.host}/ws`);}catch(e){startPoll();return;}
+  ws.onopen=()=>{wsOk=true;setConn("on");stopPoll();syncTime();};
+  ws.onmessage=e=>{try{render(JSON.parse(e.data));}catch(_){}};
+  ws.onclose=()=>{wsOk=false;setConn("off");startPoll();setTimeout(connectWS,3000);};
+  ws.onerror=()=>{try{ws.close();}catch(_){}};}
+async function syncTime(){
+  try{await fetch("/api/time",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({epoch:Math.floor(Date.now()/1000)})});}catch(_){}
+}
+function startPoll(){if(pollTimer)return;setConn("poll");
+  const tick=async()=>{try{const r=await fetch("/api/live",{cache:"no-store"});render(await r.json());setConn(wsOk?"on":"poll");}catch(_){setConn("off");}};
+  tick();pollTimer=setInterval(tick,2500);}
+function stopPoll(){if(pollTimer){clearInterval(pollTimer);pollTimer=null;}}
+setInterval(()=>{const s=Date.now()-lastData>8000;document.querySelectorAll(".card").forEach(c=>c.classList.toggle("stale",s&&lastData>0));},2000);
+
+const WARN=[[1,"Kapazität niedrig"],[2,"MOS-Temp hoch"],[4,"Lade-Überspannung"],[8,"Entlade-Unterspg."],
+[16,"Lade-Überstrom"],[32,"Entlade-Überstrom"],[64,"Kurzschluss"],[128,"Zelle Überspg."],
+[256,"Zelle Unterspg."],[512,"Ladetemperatur"],[1024,"Entladetemp."],[2048,"Umgebungstemp."]];
+function decodeWarn(f){const o=[];for(const[m,n]of WARN)if(f&m)o.push(n);return o;}
+
+let lastBms=null, gEpoch=0, gBootTs=0, gSynced=false;
+function render(D){
+  lastData=Date.now();
+  gEpoch=D.epoch||0; gBootTs=D.ts||0; gSynced=!!D.synced;
+  const gEpochMez=D.epoch_mez||0;
+  $("tClock").textContent = (gEpochMez>1704067200) ? (gSynced?"":"~")+new Date(gEpochMez*1000).toLocaleTimeString("de-DE",{timeZone:"UTC"}) : "--:--:--";
+  $("tUp").textContent=uptime(D.ts); $("tBuf").textContent=intf(D.buf);
+  $("dSd").className="dot "+(D.sd?"on":"off");
+
+  const b=D.bms||{}; lastBms=b;
+  if(b.valid){
+    $("bmsBadge").textContent=`Frames ${intf(b.fc)} · Fehler ${intf(b.ec)}`;
+    $("soc").textContent=b.soc;
+    const off=157-157*Math.min(100,Math.max(0,b.soc))/100;
+    const a=$("socArc");a.setAttribute("stroke-dashoffset",off);
+    a.setAttribute("stroke",b.soc<20?"var(--bad)":b.soc<40?"var(--pv)":"var(--akku)");
+    const i=b.i||0;
+    $("flow").innerHTML=i>0.05?`<span style="color:var(--pv)">▼ Entladen ${fmt(Math.abs(i),1)} A</span>`
+      :i<-0.05?`<span style="color:var(--akku)">▲ Laden ${fmt(Math.abs(i),1)} A</span>`:"Ruhe";
+    $("bV").textContent=fmt(b.v,2);$("bI").textContent=fmt(b.i,1);$("bP").textContent=intf(b.pw);
+    $("bRem").textContent=fmt(b.rem,1);$("bNom").textContent=fmt(b.nom,0);
+    // Zell-Δ entfernt v5.0
+    $("tMos").textContent=fmt(b.t_mos,0);$("tS1").textContent=fmt(b.t_s1,0);
+    $("tS2").textContent=fmt(b.t_s2,0);
+    const mo=x=>x?'<span style="color:var(--ok)">EIN</span>':'<span style="color:var(--faint)">aus</span>';
+    // MOSFET pre_en + Schutzparameter entfernt v5.0
+    $("sBfc").textContent=intf(b.fc);$("sBec").textContent=intf(b.ec);
+    // renderCells entfernt v5.0
+    // Alarme entfernt v5.0 (warningFlags nicht mehr erfasst)
+  }else{$("bmsBadge").textContent="keine Daten";}
+
+  const m=D.mppt||{};
+  if(m.valid){
+    $("mpptBadge").textContent=m.timeout?"TIMEOUT":`Frames ${intf(m.fc)}`;
+    $("mpptBadge").style.color=m.timeout?"var(--bad)":"var(--faint)";
+    $("ppv").textContent=intf(m.ppv);$("mState").textContent=m.cs_s||"–";
+    $("mVpv").textContent=fmt(m.vpv,1);$("mV").textContent=fmt(m.v,2);$("mI").textContent=fmt(m.i,2);
+    $("mYt").textContent=fmt(m.h20,2);
+    $("mYtot").textContent=intf(m.h21);  // h21 = Max-Leistung heute (W)
+    $("mDev").textContent=`PV ${intf(m.ppv)} W · ${m.cs_s||"?"}`;$("sMfc").textContent=intf(m.fc);
+  }else{$("mpptBadge").textContent="keine Daten";}
+
+  const io=D.io||{},lg=D.logic||{};
+  setSw("swD",io.relay_dplus);setSw("swG",io.mosfet_gel);setSw("swW",io.wr_remote);setSw("swL",io.landstrom);
+  $("rsD").textContent=lg.reason_dplus||"–";$("rsG").textContent=lg.reason_gel||"–";$("rsW").textContent=lg.reason_wr||"–";
+  $("dbD").textContent=db(lg.db_dplus);$("dbG").textContent=db(lg.db_gel);$("dbW").textContent=db(lg.db_wr);
+  $("landBadge").innerHTML=io.landstrom?'<span style="color:var(--netz)">⚡ Landstrom</span>':'<span style="color:var(--faint)">Autark</span>';
+
+  $("sBuf").textContent=intf(D.buf);$("sSd").innerHTML=D.sd?'<span style="color:var(--ok)">verfügbar</span>':'<span style="color:var(--bad)">fehlt</span>';
+  $("sUp").textContent=uptime(D.ts);
+  const sys=D.sys||{};
+  if(sys.heap!=null){
+    const kb=sys.heap/1024, lo=sys.heap<20480;
+    $("sHeap").innerHTML=`<span style="color:${lo?"var(--bad)":"inherit"}">${kb.toFixed(1)} kB</span>`
+      +` <span style="color:var(--faint)">(min ${(sys.min_heap/1024).toFixed(1)})</span>`;
+  } else $("sHeap").textContent="–";
+  $("sPsram").textContent=sys.psram!=null?`${(sys.psram/1024/1024).toFixed(2)} MB`:"–";
+  const rtc=D.rtc||{};
+  if(!rtc.present){
+    $("sRtc").innerHTML='<span style="color:var(--bad)">fehlt</span>';
+  }else if(!rtc.valid){
+    $("sRtc").innerHTML='<span style="color:var(--bad)">Batterie leer (OSF)</span>';
+  }else{
+    $("sRtc").innerHTML='<span style="color:var(--ok)">OK</span>';
+  }
+  $("sDrift").textContent = (rtc.drift==null) ? "– (noch kein Sync)"
+      : `${rtc.drift>0?"+":""}${rtc.drift} s`;
+  $("sTemp").textContent = (rtc.temp==null) ? "–" : `${rtc.temp.toFixed(1)} °C`;
+  const inv=D.inv||{};$("sInv").textContent=inv.note||"Stub";
+}
+function setSw(id,on){$(id).classList.toggle("on",!!on);}
+function db(v){if(v==null)return"";if(v>0)return`+${v}▲`;if(v<0)return`${v}▼`;return"·";}
+function renderCells(b){
+  // Zellspannungen entfernt v5.0
+}
+
+/* ---- Live-Graph ---- */
+const METRICS={
+  soc:{label:"SoC",unit:"%",color:"#3fb8af",get:d=>d.soc,fix:0,fixed:[0,100]},
+  v:{label:"Pack-Spannung",unit:"V",color:"#7c8cf0",get:d=>d.v,fix:2},
+  i:{label:"Strom",unit:"A",color:"#e5484d",get:d=>d.i,fix:1},
+  ppv:{label:"PV-Leistung",unit:"W",color:"#f5a623",get:d=>d.ppv,fix:0},
+  vpv:{label:"PV-Spannung",unit:"V",color:"#ffc24b",get:d=>d.vpv,fix:1},
+
+  rem:{label:"Rest-Kapazität",unit:"Ah",color:"#42c98a",get:d=>d.rem,fix:1},
+};
+const WINDOWS={"30m":900,"2h":3600,"6h":10800,"24h":43200,"48h":86400};
+let liveMetric="soc",liveWin="30m",liveData=[],liveTimer=null,paramsLoaded=false;
+
+(function initLiveControls(){
+  $("liveMetric").innerHTML=Object.entries(METRICS).map(([k,m])=>`<option value="${k}">${m.label} (${m.unit})</option>`).join("");
+  $("liveMetric").onchange=e=>{liveMetric=e.target.value;loadLive();};
+  document.querySelectorAll("#liveRange button").forEach(b=>b.onclick=()=>{
+    document.querySelectorAll("#liveRange button").forEach(x=>x.classList.remove("active"));
+    b.classList.add("active");liveWin=b.dataset.w;loadLive();});
+})();
+
+async function loadLive(){
+  const samples=WINDOWS[liveWin],maxPoints=700;
+  const step=Math.max(1,Math.ceil(samples/maxPoints));
+  const count=Math.min(2000,Math.ceil(samples/step));
+  try{
+    const r=await fetch(`/api/buffer?offset=0&count=${count}&step=${step}`,{cache:"no-store"});
+    const arr=await r.json();
+    liveData=Array.isArray(arr)?arr.slice().reverse():[];
+    drawLive();
+  }catch(_){toast("Live-Graph nicht ladbar","bad");}
+  clearTimeout(liveTimer);
+  if($("live").classList.contains("active"))liveTimer=setTimeout(loadLive,20000);
+}
+function drawLive(){drawChart($("chart"),$("chartWrap"),liveData,METRICS[liveMetric],$("liveCur"));}
+
+/* ---- Verlauf (SD) ---- */
+let sdData=[],sdFile=null,sdMetric="soc";
+$("sdMetric").onchange=e=>{sdMetric=e.target.value;drawSd();};
+async function loadSdFiles(){
+  try{
+    const r=await fetch("/api/sdfiles",{cache:"no-store"});
+    if(!r.ok){$("sdState").textContent="SD fehlt";$("sdList").innerHTML='<span style="color:var(--faint);font-size:13px">SD nicht verfügbar.</span>';return;}
+    const files=await r.json();$("sdState").textContent=`${files.length} Dateien`;
+    if(!files.length){$("sdList").innerHTML='<span style="color:var(--faint);font-size:13px">Noch keine CSV-Dateien.</span>';return;}
+    $("sdList").innerHTML=files.map(f=>`<div class="sdfile" data-f="${f.name}"><span class="fn">${f.name}</span><span class="sz">${(f.size/1024).toFixed(1)} kB</span></div>`).join("");
+    document.querySelectorAll(".sdfile").forEach(el=>el.onclick=()=>loadSdData(el.dataset.f,el));
+  }catch(_){$("sdList").innerHTML='<span style="color:var(--faint);font-size:13px">Fehler beim Laden.</span>';}
+}
+async function loadSdData(file,el){
+  document.querySelectorAll(".sdfile").forEach(x=>x.classList.remove("sel"));el&&el.classList.add("sel");
+  sdFile=file;$("sdInfo").textContent="Lade…";
+  try{
+    const r=await fetch(`/api/sddata?file=${encodeURIComponent(file)}&skip=0&limit=2000`,{cache:"no-store"});
+    const arr=await r.json();
+    sdData=Array.isArray(arr)?arr:[];
+    $("sdInfo").textContent=`${file} · ${sdData.length} Punkte`;
+    drawSd();
+  }catch(_){$("sdInfo").textContent="Fehler";}
+}
+const SD_METRICS={soc:{label:"SoC",unit:"%",color:"#3fb8af",get:d=>+d.soc,fix:0,fixed:[0,100]},
+  v:{label:"Spannung",unit:"V",color:"#7c8cf0",get:d=>+d.v,fix:2},
+  i:{label:"Strom",unit:"A",color:"#e5484d",get:d=>+d.i,fix:1},
+  ppv:{label:"PV-Leistung",unit:"W",color:"#f5a623",get:d=>+d.ppv,fix:0}};
+function drawSd(){drawChart($("sdChart"),$("sdChartWrap"),sdData,SD_METRICS[sdMetric],null);}
+
+/* ---- gemeinsame Canvas-Chart ---- */
+function drawChart(cv,wrap,data,metric,curEl){
+  const dpr=window.devicePixelRatio||1,W=wrap.clientWidth,H=wrap.clientHeight;
+  cv.width=W*dpr;cv.height=H*dpr;const x=cv.getContext("2d");x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,W,H);
+  const padL=48,padR=14,padT=14,padB=26,plotW=W-padL-padR,plotH=H-padT-padB;
+  x.strokeStyle="#26333d";x.lineWidth=1;x.font="11px ui-monospace,monospace";
+  for(let g=0;g<=4;g++){const yy=padT+plotH*g/4;x.beginPath();x.moveTo(padL,yy);x.lineTo(W-padR,yy);x.stroke();}
+  if(!data||!data.length){x.fillStyle="#5c6b76";x.fillText("Keine Daten",padL+8,padT+plotH/2);if(curEl)curEl.textContent="–";return;}
+  const vals=data.map(metric.get);
+  let mn,mx;
+  if(metric.fixed){mn=metric.fixed[0];mx=metric.fixed[1];}
+  else{mn=Math.min(...vals);mx=Math.max(...vals);const pad=(mx-mn)*0.08||1;mn-=pad;mx+=pad;}
+  if(mx-mn<1e-9)mx=mn+1;
+  // Y-Labels
+  x.fillStyle="#5c6b76";x.textAlign="right";
+  for(let g=0;g<=4;g++){const yy=padT+plotH*g/4,val=mx-(mx-mn)*g/4;x.fillText(val.toFixed(metric.fix),padL-6,yy+4);}
+  // X relative time
+  const t0=data[0].ts,t1=data[data.length-1].ts,tsp=Math.max(1,t1-t0);
+  x.textAlign="center";
+  const useReal=t1>=1704067200;
+  for(let g=0;g<=4;g++){const tx=padL+plotW*g/4, tsAt=t0+tsp*g/4;
+    let lab;
+    if(useReal){lab=new Date(tsAt*1000).toLocaleTimeString("de-DE",{hour:"2-digit",minute:"2-digit"});}
+    else{const ago=Math.round(t1-tsAt);
+      lab=g===4?"jetzt":ago>=3600?`-${(ago/3600).toFixed(1)}h`:ago>=60?`-${Math.round(ago/60)}m`:`-${ago}s`;}
+    x.fillText(lab,tx,H-8);}
+  const X=t=>padL+plotW*(t-t0)/tsp, Y=v=>padT+plotH*(1-(v-mn)/(mx-mn));
+  // Gradient-Fill
+  const grad=x.createLinearGradient(0,padT,0,padT+plotH);
+  grad.addColorStop(0,metric.color+"55");grad.addColorStop(1,metric.color+"00");
+  x.beginPath();x.moveTo(X(data[0].ts),padT+plotH);
+  data.forEach(d=>x.lineTo(X(d.ts),Y(metric.get(d))));
+  x.lineTo(X(t1),padT+plotH);x.closePath();x.fillStyle=grad;x.fill();
+  // Linie
+  x.beginPath();x.strokeStyle=metric.color;x.lineWidth=2;x.lineJoin="round";
+  data.forEach((d,i)=>{const px=X(d.ts),py=Y(metric.get(d));i?x.lineTo(px,py):x.moveTo(px,py);});
+  x.stroke();
+  if(curEl){const last=vals[vals.length-1];curEl.innerHTML=`<span style="color:${metric.color}">${(last==null||isNaN(last))?"–":last.toFixed(metric.fix)} ${metric.unit}</span>`;}
+}
+window.addEventListener("resize",()=>{
+  if($("live").classList.contains("active"))drawLive();
+  if($("hist").classList.contains("active"))drawSd();
+});
+
+/* ---- Einstellungen ---- */
+const PKEYS=["socDPlusOn","socDPlusOff","socDPlusHigh","pvThresholdOn","pvThresholdOff","socGelOn","socGelHigh","pvGelMinW","socWROn","socWROff","relayDebounceCycles","logIntervalMs"];
+async function loadParams(){
+  try{const r=await fetch("/api/params",{cache:"no-store"});const p=await r.json();const f=$("paramForm");
+    PKEYS.forEach(k=>{if(f[k])f[k].value=p[k];});
+    $("logMin").value=Math.round((p.logIntervalMs||900000)/60000);paramsLoaded=true;
+  }catch(_){toast("Parameter nicht ladbar","bad");}
+}
+$("revertBtn").onclick=loadParams;
+$("paramForm").addEventListener("submit",async e=>{
+  e.preventDefault();const f=e.target,body={};
+  PKEYS.forEach(k=>{if(f[k].value!=="")body[k]=+f[k].value;});
+  if($("logMin").value!=="")body.logIntervalMs=Math.round(+$("logMin").value*60000);
+  $("saveBtn").disabled=true;
+  try{const r=await fetch("/api/params",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const res=await r.json();
+    if(r.ok&&res.ok){toast("Gespeichert","ok");loadParams();}else toast(res.error||"Wert außerhalb Grenzen","bad");
+  }catch(_){toast("Speichern fehlgeschlagen","bad");}finally{$("saveBtn").disabled=false;}
+});
+$("resetBtn").onclick=async()=>{
+  if(!confirm("Alle Parameter auf Werkseinstellungen zurücksetzen?"))return;
+  try{const r=await fetch("/api/reset",{method:"POST"});if(r.ok){toast("Werks-Reset durchgeführt","ok");paramsLoaded=false;loadParams();}}
+  catch(_){toast("Reset fehlgeschlagen","bad");}
+};
+
+/* Start */
+connectWS();startPoll();loadLive();syncTime();setInterval(syncTime,300000);
+</script>
+</body>
+</html>

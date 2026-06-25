@@ -1,0 +1,588 @@
+╔══════════════════════════════════════════════════════════════════╗
+║     LASTEN- UND PFLICHTENHEFT — SOFTWARE                        ║
+║     Womo Energy Core v5.0                                        ║
+║     Stand: Code-Audit + Vollkorrektur + Erweiterung HEX-TX      ║
+╚══════════════════════════════════════════════════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TEIL 1 — LASTENHEFT (Was soll die Software leisten?)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+L-SW01 | DATENAKQUISITION BMS  [GEÄNDERT]                    [MUSS]
+  Die Software liest folgende Daten aus dem JK-BMS (4S LFP 280Ah)
+  über RS485 aus: SoC [%], Strom [A mit Vorzeichen + = LADEN /
+  − = ENTLADEN (am Gerät verifiziert, Zweierkomplement int16)],
+  Gesamtspannung [V], 3 Temperaturen (Tube/Kern, Sensor1/Rand,
+  BMS/MOS), Restkapazität [Ah abgeleitet], Nennkapazität [Ah],
+  MOSFET-Status (Laden/Entladen).
+  Abfrage-Intervall: 2 Sekunden.
+  Byte-Offsets und Skalierungsfaktoren nach Erstbetrieb mit echten
+  Roh-Frames verifizieren (BMS_DEBUG_RAW=1 in bms.cpp).
+
+L-SW02 | DATENAKQUISITION MPPT  [GEÄNDERT]                  [MUSS]
+  Die Software liest folgende VE.Direct Text Protocol Felder des
+  Victron MPPT 100/30: Batteriespannung (V), Ladestrom (I),
+  PV-Leistung (PPV), Ladezustand (CS), Fehlercode (ERR),
+  Off-Reason (OR), Tagesertrag (H20), Maximalleistung heute (H21).
+  Senden erforderlich — kein reiner RX: Die Kerntemperatur des BMS
+  (tempTube) wird via VE.Direct HEX-Protokoll an den MPPT gesendet,
+  damit dieser temperaturkompensiertes Laden für den LFP-Akku
+  durchführen kann. Text-Protokoll (Empfang) und HEX-Protokoll
+  (Senden) laufen parallel auf UART2. Siehe P-SW04 und P-SW09.
+  HINWEIS: VictronConnect TX-Modus konfigurieren (→ "VE.Direct").
+
+L-SW03 | SCHALTLOGIK D+-RELAIS (KÜHLSCHRANK)  [GEÄNDERT]   [MUSS]
+  EIN  wenn: SoC >= 95% UND PV(MA) >= 150W UND kein Landstrom
+             UND BMS-Daten gültig UND nicht veraltet (> 60s)
+             UND MPPT stabil (nach Recovery-Debounce)
+  HALT wenn: bereits EIN, keine AUS-Bedingung erfüllt (Hysterese-Band)
+  AUS  wenn: (harte Bedingungen — sofort, auch während Mindestlaufzeit)
+             BMS-Daten ungültig oder veraltet (> 60s kein Frame)
+             ODER MPPT ungültig/Timeout (> 60s kein Frame)
+             ODER Landstrom erkannt
+             (weiche Bedingungen — durch Mindestlaufzeit hemmbar)
+             (PV(MA) < 100W UND SoC < socDPlusHigh) ODER SoC < 80%
+  Bedeutung: Bei hohem SoC (>= socDPlusHigh) bleibt der Kühlschrank
+    auch bei vorübergehendem PV-Einbruch eingeschaltet. Erst wenn der
+    SoC unter socDPlusHigh fällt, kann ein PV-Einbruch zum AUS führen.
+    Unter 80% SoC (hart) schaltet ab, unabhängig von PV.
+  Hysterese: 15% SoC (EIN 95 / hart-AUS 80), PV: 50W (EIN 150 / AUS 100).
+  Flatter-Schutz: Zustandsänderung erst nach 10 stabilen Zyklen (20s).
+  PV-Glättung: gleitender Mittelwert über 30 Sekunden (15 × 2s).
+  Mindestlaufzeit D+ (Kompressor-Schutz): nach dem Einschalten werden
+    weiche AUS-Bedingungen für 5 Minuten gehemmt. Harte greifen sofort.
+  MPPT-Recovery-Debounce: 5 aufeinanderfolgende gültige Frames (≈ 10s)
+    erforderlich, bevor MPPT nach Timeout wieder als "gesund" gilt.
+
+L-SW04 | SCHALTLOGIK GEL-LADER (STARTERBATTERIE)  [GEÄNDERT][MUSS]
+  EIN  wenn: SoC >= 82% UND PV(MA) >= 60W
+             UND BMS-Daten gültig UND nicht veraltet (> 60s)
+             UND MPPT stabil (nach Recovery-Debounce)
+  HALT wenn: bereits EIN, keine AUS-Bedingung erfüllt
+  AUS  wenn: (PV(MA) < pvGelMinW UND SoC < socGelHigh) ODER SoC < 82%
+  Bedeutung: Bei hohem SoC (>= socGelHigh) läuft der Gel-Lader auch
+    ohne PV weiter. Fällt der SoC unter socGelHigh (Default 90%), hält
+    nur noch ausreichende PV-Leistung den Lader am Laufen. Unter 82%
+    (hart) schaltet sofort ab.
+  Kein separater socGelOff-Parameter — harte AUS-Schwelle = socGelOn.
+  Gleichzeitiger Betrieb mit D+-Relais möglich und gewollt.
+  Kein Landstrom-Check (Gel-Lader unabhängig vom Netzstrom).
+
+L-SW05 | SCHALTLOGIK WECHSELRICHTER REMOTE  [GEÄNDERT]     [SOLLTE]
+  EIN  wenn: SoC >= socWROn UND kein Landstrom
+             UND BMS-Daten gültig UND nicht veraltet (> 60s)
+  HALT wenn: bereits EIN, keine AUS-Bedingung erfüllt
+  AUS  wenn: (hart) Landstrom ODER BMS ungültig/veraltet
+             (weich) SoC < socWROff
+  Keine PV-Bedingung — WR-Schaltung ausschließlich SoC-basiert.
+  Schwellwerte (socWROn/Off) unabhängig von D+ konfigurierbar.
+  Default: 95/80% SoC. Flatter-Schutz: 10 Zyklen.
+
+L-SW06 | LANDSTROM-ERKENNUNG                               [MUSS]
+  Hardware-Signal (PC817-Optokoppler an MeanWell HDR-15-5) wird als
+  GPIO-Pin eingelesen. HIGH = Landstrom vorhanden. Das Signal liegt
+  in Sektor A (vor NVS), ist damit immun gegen WR-Einspeisung.
+  Bei Landstrom werden D+-Relais und WR-Remote sofort deaktiviert.
+
+L-SW07 | FAIL-SAFE / WATCHDOG                              [MUSS]
+  Zweistufiges Watchdog-Konzept:
+   (a) Hardware-Watchdog (esp_task_wdt, 4 Sekunden) überwacht NUR die
+       Hauptschleife loop(). Bei Loop-Hang → sofortiger harter Reset
+       (Silizium-Reset, ohne SD-Rettung).
+   (b) Software-Watchdog (watchdog.cpp) überwacht BMS, MPPT, Logger.
+       Bei Modul-Hang: SD-Notsicherung, dann SOFORTIGER Reboot.
+       Anti-Bootloop: 15 Minuten degradierter Betrieb, dann erneuter
+       Versuch. Reboot-Grund in RTC-Memory (übersteht ESP.restart()).
+  Alle Relais und MOSFETs fallen bei Stromlosigkeit in sicheren
+  Aus-Zustand (Fail-Safe durch Active-LOW/HIGH der Hardware).
+
+L-SW08 | RAM-RINGPUFFER                                    [MUSS]
+  Alle 2 Sekunden wird ein Dateneintrag im PSRAM-Ringpuffer gespeichert.
+  Puffergröße: 86.400 Einträge = 48 Stunden in voller 2s-Auflösung.
+  Speicher: 86.400 × 32 Byte = 2,76 MB PSRAM (von 8 MB).
+  Interner SRAM bleibt vollständig für Webserver und Stack frei.
+  Bei Stromausfall gehen Pufferdaten verloren (flüchtig).
+
+L-SW09 | SD-LOGGING                                        [MUSS]
+  Aus den 2s-Rohwerten wird je MINUTE ein arithmetischer Mittelwert
+  gebildet (eine CSV-Zeile pro Minute). Minutenzeilen werden gepuffert
+  und alle logIntervalMs (Default 15 Minuten) als Batch geschrieben.
+  Dateiformat: CSV, eine Datei pro Kalendertag (/log_NNNNN.csv,
+  NNNNN = Tage seit 1970 in MEZ).
+  Inhalt: Timestamp (Epoch in MEZ, siehe L-SW19), Spannung, Strom,
+  SoC, 4 Temperaturen, Restkapazität, PV-Leistung, PV-Spannung,
+  PV-Strom, MPPT-Status, Fehler, Landstrom/Aktoren-Flags.
+  Alle SD-Zugriffe aus allen Tasks über g_sdMutex synchronisiert.
+
+L-SW10 | WEBINTERFACE — ZUGANG                             [MUSS]
+  ESP32-S3 arbeitet als WLAN Access Point.
+  SSID: GODMODULE | Passwort: BM-hy678 | Kanal: 6 | Max. 3 Clients.
+  Erreichbar unter http://192.168.4.1 (AP-Standard-IP).
+  Komplett offline-fähig — kein Internet erforderlich.
+  Dashboard wird aus LittleFS (/index.html) geliefert.
+
+L-SW11 | WEBINTERFACE — LIVE-DASHBOARD                     [MUSS]
+  Aktualisierung alle 2 Sekunden via WebSocket (Pfad /ws, Port 80).
+  Vier Tabs: Live | Verlauf | System | Einstellungen.
+  Anzeige: SoC-Anzeige (SVG-Bogen mit Farbwechsel), alle bekannten
+  BMS-Werte, alle bekannten MPPT-Werte, Aktoren-Status.
+  Kopf-Uhr zeigt echte Uhrzeit in MEZ (siehe L-SW19).
+  Responsives Layout für Android-Handy und Windows-PC.
+
+L-SW12 | WEBINTERFACE — LIVE-GRAPH  [GEÄNDERT]            [MUSS]
+  Chart auf dem Live-Tab, darstellbare Metrik wählbar:
+  SoC, Batterie-Spannung, Strom, PV-Leistung, PV-Spannung, Rest-Ah.
+  Zeitfenster wählbar: 30min / 2h / 6h / 24h / 48h.
+  Beim ersten Verbinden / bei Auswahl: Vorladung aus RAM-Puffer via
+  REST-API. Große Fenster werden serverseitig dezimiert geladen
+  (/api/buffer mit step-Parameter). Zeitachse: echte HH:MM (MEZ) bei
+  synchronisierter Zeit, sonst relativ (-30m … jetzt).
+  Rendering: Pure Canvas JavaScript (offline, keine externen Libs),
+  mit Gradient-Fill unter der Linie.
+
+L-SW13 | WEBINTERFACE — HISTORISCHE DATEN                 [MUSS]
+  Eigener Tab "Verlauf": Auswahl der CSV-Datei von SD-Karte,
+  Laden und Anzeige als Graph. Metriken: SoC, Spannung, Strom,
+  PV-Leistung. Bis zu 2.000 Datenpunkte pro Anfrage.
+
+L-SW14 | WEBINTERFACE — EINSTELLUNGEN  [GEÄNDERT]          [MUSS]
+  Alle variablen Parameter über Webformular änderbar und sofort
+  persistent in NVS gespeichert. Fabrik-Reset-Funktion vorhanden.
+  Änderungen wirken ohne Neustart sofort auf die Schaltlogik.
+  Plausibilitätsgrenzen werden geprüft (Wertebereichsgrenzen);
+  keine erzwungene ON > OFF Cross-Validierung mehr.
+  WR-Parameter (socWROn/Off) sind unabhängig von D+ konfigurierbar.
+
+L-SW15 | PARAMETER-PERSISTENZ (NVS)                       [MUSS]
+  Alle Schwellwerte und Betriebsparameter werden im NVS-Flash
+  des ESP32-S3 gespeichert (Namespace "womo_cfg"). Beim ersten Start
+  werden Default-Werte aus config.h geschrieben. Fabrik-Reset nur
+  über Webinterface. Die zuletzt bekannte Uhrzeit wird zusätzlich im
+  NVS-Namespace "clock" gehalten (siehe L-SW19).
+
+L-SW16 | AUTARKIE                                          [MUSS]
+  Das System läuft 100% ohne WLAN/Internet/Cloud. Keine externen
+  Dienste, keine Cloud-Abhängigkeiten. Dauerbetrieb im Fahrzeug
+  ohne Netzwerkverbindung nach außen.
+
+L-SW17 | WR-SNIFFER (EDECOA RJ12)                         [KANN]
+  Niedrigste Priorität. Protokoll noch unbekannt — Multimeter-
+  Messung am RJ12-Port des Edecoa ausstehend. Modul als Stub
+  implementiert, wird nach Protokollidentifikation befüllt.
+  Ziel: AC-Ausgangsleistung, Spannung, Status des Wechselrichters.
+
+L-SW18 | DELPHI FIREMONKEY APP (PHASE 2)                  [SOLLTE]
+  Eigene Android/Windows-App in Delphi 11 Alexandria (FireMonkey).
+  Kommunikation über BLE 5.0 oder dieselbe REST/WebSocket-API.
+  Implementierung nach Fertigstellung der ESP32-Firmware.
+  Anforderungen: Live-Daten, historische Charts, Read-Only + Reset.
+
+L-SW19 | ZEITBASIS (QUASI-ECHTZEIT OHNE RTC)  [GEÄNDERT]  [MUSS]
+  Die Zeit ist immer MEZ (UTC+1) — keine Sommerzeitumstellung.
+  Das System hat keine Hardware-RTC. Die Echtzeit wird vom Browser
+  geliefert (POST /api/time beim Verbinden und periodisch). Der ESP
+  rechnet daraus einen Epoch-Offset und sichert die laufende Zeit im
+  NVS. Nach einem Boot wird von der zuletzt gespeicherten Zeit
+  fortgesetzt (Stillstandszeit geht verloren; Korrektur beim nächsten
+  Browser-Sync). Allererster Boot: Start bei Firmware-Build-Zeit.
+  Alle Log-Zeitstempel (RAM und CSV) nutzen UTC-Epoch intern.
+  Dashboard-Anzeige und Dateinamen werden auf MEZ (UTC+1) umgerechnet.
+  Zeitbasis intern: esp_timer_get_time() (64-Bit µs, kein Überlauf).
+  Der Browser darf die Uhr zurückdrehen — bestehende zukünftige
+  CSV-Zeitstempel werden durch spätere korrekte Werte überschrieben.
+  clock_set_epoch() gibt bool zurück (false = Epoch unplausibel < 2024).
+  Driftfreie, browserunabhängige Zeit erst mit DS3231-RTC,
+  für die GPIO 1 (SDA) und GPIO 2 (SCL) reserviert sind.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+TEIL 2 — PFLICHTENHEFT (Wie ist die Software umgesetzt?)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+P-SW01 | PLATTFORM UND ENTWICKLUNGSUMGEBUNG
+  Hardware:    ESP32-S3 DevKitC-1 N16R8 (16MB Flash, 8MB Octal PSRAM)
+  Framework:   Arduino (über PlatformIO + VS Code)
+  Board-ID:    esp32-s3-devkitc-1
+  Platform:    espressif32 @ ^6.9.0  ← GEPINNT (Arduino-Core 2.x,
+               IDF 4.4). Arduino-Core 3.x / IDF 5 bricht die
+               esp_task_wdt_init(uint32_t, bool)-Signatur von watchdog.cpp.
+  Partition:   Eigene partitions_16mb.csv — KEIN OTA (Single-App):
+               nvs 20kB | app0 4MB (factory) | spiffs ~11,8MB |
+               coredump 128kB
+  Filesystem:  LittleFS (Partition-Label "spiffs", Web-Dateien: index.html)
+  Build-Flags: -DBOARD_HAS_PSRAM -DARDUINO_USB_MODE=1
+               -DARDUINO_USB_CDC_ON_BOOT=1
+  Libraries:   ← ALLE MIT OWNER UND VERSION GEPINNT:
+               esp32async/ESPAsyncWebServer @ ^3.7.0
+               esp32async/AsyncTCP          @ ^3.3.2
+               bblanchon/ArduinoJson        @ ^6.21.5
+               FS, SD, LittleFS
+               ESPAsyncTCP explizit ausgeschlossen (ESP8266-Fork).
+
+P-SW02 | PROJEKTSTRUKTUR (QUELLDATEIEN)
+  src/config.h          GPIO-Konstanten + DEFAULT_-Parameter +
+                        LOGIC_-Tuning-Konstanten (MA, Recovery, Min-on)
+  src/params.h/.cpp     NVS-Verwaltung (12 Parameter)
+  src/bms.h/.cpp        JK-BMS RS485 Parser (ID-Tabelle, 16-Bit-CHK)
+  src/mppt.h/.cpp       VE.Direct Text-Parser + HEX-TX Temperatur
+  src/inverter.h/.cpp   WR-Sniffer Stub (RJ12, Protokoll offen)
+  src/io.h/.cpp         GPIO-Init, Aktoren, Landstrom-Sensor
+  src/logic.h/.cpp      Schaltlogik (Hysterese, MA, Recovery, Min-on)
+  src/logger.h/.cpp     PSRAM-Ringpuffer + SD-Logging + g_sdMutex
+  src/clock.h/.cpp      Zeitdienst (64-Bit-Basis, MEZ+1)
+  src/watchdog.h/.cpp   Software-Modulüberwachung BMS/MPPT/Logger
+  src/http_server.h/.cpp HTTP-Server, WebSocket, REST-API (Streaming)
+  src/main.cpp          Setup, FreeRTOS-Tasks, HW-Watchdog
+  data/index.html       Dashboard (LittleFS, Offline-fähig)
+  partitions_16mb.csv   Partitionstabelle (kein OTA)
+  platformio.ini        Build-Konfiguration (gepinnte Abhängigkeiten)
+
+P-SW03 | GPIO-BELEGUNG (FINAL, ESP32-S3 N16R8)  [GEÄNDERT]
+  GPIO  1   → I2C SDA   DS3231 RTC (reserviert, nicht bestückt)
+  GPIO  2   → I2C SCL   DS3231 RTC (reserviert, nicht bestückt)
+  GPIO  4   → frei (ADC1, für analoge Erweiterungen)
+  GPIO  5   → frei (ADC1, für analoge Erweiterungen)
+  GPIO  6–10→ frei (ADC1, für analoge Erweiterungen)
+  GPIO 11   → SPI CS    SD-Karte
+  GPIO 12   → SPI CLK   SD-Karte
+  GPIO 13   → SPI MOSI  SD-Karte
+  GPIO 14   → SPI MISO  SD-Karte
+  GPIO 15   → DE/RE     MAX485 (Richtungssteuerung RS485)
+  GPIO 16   → UART1 RX  JK-BMS empfangen
+  GPIO 17   → UART1 TX  JK-BMS senden (Query-Frame)
+  GPIO 18   → INPUT     Landstrom-Sensor (Optokoppler, PULLUP)
+  GPIO 21   → OUTPUT    D+-Relais Kühlschrank (Active-LOW)
+  GPIO 38   → UART2 RX  VE.Direct MPPT Text-Protokoll (RX-only Pfad)
+  GPIO 39   → OUTPUT    Starter-Lader MOSFET (Active-HIGH)
+              HINWEIS: Standard-JTAG (MTCK). Nutzbar da USB-JTAG aktiv.
+  GPIO 40   → OUTPUT    WR-Remote Optokoppler (Active-HIGH)
+  GPIO 41   → OUTPUT    Status-LED (einfache LED, extern)
+  GPIO 48   → OUTPUT    On-board RGB-LED WS2812 (Status, neu v5.0)
+  GPIO 42   → UART2 TX  VE.Direct MPPT HEX-Protokoll (TX, neu v5.0)
+              HINWEIS: Standard-JTAG (MTMS). Nutzbar da USB-JTAG aktiv.
+              3,3V Pegel — MPPT VE.Direct-Eingang ist 3,3V-kompatibel,
+              kein Pegelwandler für TX-Richtung erforderlich.
+  GESPERRT: 0,3,19,20,26-37,45,46 (Strapping/Flash/USB/PSRAM)
+  RESERVIERT ANALOG: GPIO 4–10 (ADC1-sicher, für Erweiterungen)
+  RESERVIERT I2C:    GPIO 1 (SDA) + GPIO 2 (SCL) für DS3231
+
+P-SW04 | SERIELLE SCHNITTSTELLEN  [GEÄNDERT]
+  UART1 (BMS):  GPIO 16 RX / 17 TX, 115200 Baud, 8N1
+                DE/RE MAX485 über GPIO 15 (HIGH=Senden, LOW=Empfang)
+                Polling: Query-Frame alle 2000ms; adaptiver Empfang
+                (Abbruch bei 40ms Pause oder vollständigem Frame)
+  UART2 (MPPT): GPIO 38 RX / GPIO 42 TX, 19200 Baud, 8N1
+                Spannungsteiler RX: 1kΩ + 2kΩ (5V→3,3V)
+                TX: kein Pegelwandler nötig (3,3V kompatibel)
+                Text-Protokoll (RX): MPPT sendet automatisch alle ~1s
+                HEX-Protokoll (TX): ESP32 sendet BMS-Temperatur an MPPT
+                Beide Protokolle laufen auf demselben UART2.
+  USB CDC:      Serieller Monitor, 115200 Baud
+
+P-SW05 | FREERTOS TASK-ARCHITEKTUR
+  Core 1 | Prio 4 | logic_task  (8kB Stack)
+    → watchdog_kick(WDT_BMS), BMS poll (2s), Schaltlogik,
+      logger_append()
+  Core 1 | Prio 3 | mppt_task   (4kB Stack)
+    → watchdog_kick(WDT_MPPT), VE.Direct lesen (100ms),
+      HEX-TX Temperatur senden, inverter_poll()
+  Core 0 | Prio 2 | logger_task (4kB Stack)
+    → watchdog_kick(WDT_LOGGER) + logger_flush_sd(), alle 5s
+  Core 0 | Prio 2 | ws_task     (4kB Stack)
+    → webserver_broadcast() alle 2s an alle WS-Clients
+  Core 0 | Prio 1 | watchdog_task  (in watchdog.cpp)
+    → überwacht Modul-Timer, hängt selbst am HW-WDT (Backstop)
+  Main Loop:
+    → esp_task_wdt_reset() (HW-WDT, 4s) + Heap-Überwachung (< 20kB)
+
+P-SW06 | MUTEX-KONZEPT (THREAD-SICHERHEIT)
+  g_bmsMutex   (bms.cpp)    → schützt BMSData g_bms
+  g_mpptMutex  (mppt.cpp)   → schützt MPPTData g_mppt inkl. Timeout-Flag
+  g_sdMutex    (logger.cpp) → schützt ALLE SD-Operationen im Projekt
+  s_mutex      (logger.cpp) → schützt Ringpuffer + Minuten-Akkumulator
+  s_reason_mux (logic.cpp)  → portMUX Spinlock für Reason-Strings
+  logic.cpp liest g_bms/g_mppt mutex-geschützt in lokale Snapshots.
+  Timeout bei allen xSemaphoreTake: 10–200ms je nach Priorität.
+
+P-SW07 | DATENSTRUKTUREN  [GEÄNDERT]
+  BMSData (bms.h):  Temperaturen [4], Spannung, Strom (+ = LADEN),
+    Leistung, SoC, Kapazitäten (Nenn + abgeleitet), MOSFET-Status,
+    Frame-/Fehlerzähler, lastUpdateMs (für Staleness-Check).
+    Entfernt ggü. v4.x: Zellspannungen, Zyklen, Balancing,
+    Alarm-/Schutz-Bitmasks, Schutzparameter.
+  MPPTData (mppt.h): Live-Messwerte (V, I, PPV), Ladezustand (CS),
+    Fehler (ERR), Off-Reason (OR), Tagesertrag (H20), Maximalleistung
+    heute (H21), Frame-/Timeoutstatus, lastUpdateMs.
+  IOState (io.h): Landstrom-Flag, Zustände aller 4 Aktoren.
+  LogEntry (logger.h): 32 Byte, __attribute__((packed)), static_assert.
+    Timestamp = UTC Epoch intern (Anzeige in MEZ).
+  Params (params.h): 12 NVS-Parameter, global als g_params.
+    Neu in v5.0: socDPlusHigh, socGelHigh.
+    Entfernt: socGelOff (= socGelOn), pvWRThresholdOn, pvWRThresholdOff.
+  Zeit (clock.cpp): esp_timer_get_time()-Offset + Sync-Status,
+    NVS-persistent (Namespace "clock"), Zeitzone MEZ (UTC+1).
+
+P-SW08 | JK-BMS PROTOKOLL-IMPLEMENTIERUNG  [GEÄNDERT]
+  Query-Frame (21 Byte, Checksum 0x0129):
+    4E 57 00 13 00 00 00 00 06 03 00 00 00 00 00 00 68 00 00 01 29
+  Antwort: SOF 4E 57, LEN (2 Byte), Daten..., 68, REC, CHK (2 Byte)
+  ID→Länge-Tabelle: Bekannte Identifier mit fixer Payload-Länge
+    tabelliert → kein Parser-Desync bei unbekannten Feldern.
+  0x79 (Zellspannungen): Wird empfangen aber nicht gespeichert (v5.0).
+  Temperaturen 0x80–0x82: 1°C-Schritte; Werte > 100 = negativ.
+  Checksumme: 16-Bit (Summe & 0xFFFF, letzte 2 Byte).
+  Framelänge adaptiv: Kandidaten LEN+2, LEN+4 und rx_len geprüft.
+  Header-Resync: align_to_header() wirft Müll-Bytes vor 0x4E 0x57 weg.
+  Strom-Kodierung: BMS_CURRENT_MODE/SCALE in config.h. + = LADEN.
+  Staleness: millis() − lastUpdateMs < BMS_STALE_TIMEOUT_MS (60s).
+  bms_to_json() liefert: valid, soc, v, i, pw, Temperaturen,
+    rem, nom, mosfet-Status, frameCount, errorCount.
+    Nicht mehr enthalten: Zellspannungen, Zyklen, Balancing, Alarmflags,
+    Schutzparameter.
+  Roh-Frame-Logging: dump_frame() bei CHK-Fehler; BMS_DEBUG_RAW=1
+    für alle Frames. Byte-Offsets nach Erstbetrieb verifizieren!
+
+P-SW09 | VE.DIRECT PROTOKOLL-IMPLEMENTIERUNG  [GEÄNDERT]
+  Text-Protokoll (Empfang, unverändert):
+    Format: ASCII Key\tValue\r\n, Block endet mit "Checksum\tByte\r\n"
+    MPPT sendet automatisch alle ~1s — kein Request-Frame nötig.
+    Parsing: Zeile für Zeile, Tab-Trennzeichen, Commit bei "Checksum".
+    Timeout: nach MPPT_FRAME_TIMEOUT_MS (3000ms) →
+      g_mppt.timeout = true (unter g_mpptMutex gesetzt).
+  HEX-Protokoll (Senden, neu v5.0):
+    Ziel: BMS-Kerntemperatur (tempTube) an MPPT senden, damit der
+    MPPT temperaturkompensiertes Laden (LFP-optimiert) durchführt.
+    Protokoll: Victron VE.Direct HEX (bidirektional, binär kodiert,
+    ASCII-Hex-Darstellung über UART). Nur das für Temperatur-Senden
+    nötige Subset wird implementiert — kein vollständiger HEX-Stack.
+    Sendeintervall: alle 10s aus mppt_task heraus.
+    Fehlerbehandlung: fehlgeschlagene HEX-Übertragungen werden
+    ignoriert (Non-blocking; Text-Protokoll hat Priorität).
+    UART2 TX: GPIO 42 (3,3V, kein Pegelwandler erforderlich).
+
+P-SW10 | SCHALTLOGIK DETAIL (logic.cpp)  [GEÄNDERT]
+  Hysterese: want = aktueller Aktor-Zustand. EIN-Transition nur
+    wenn cur=false und alle EIN-Bedingungen erfüllt.
+    AUS-Bedingungen dominieren immer.
+  AUS-Priorität (first-error-wins) für D+-Relais:
+    1. BMS ungültig/veraltet   (hart — auch während Mindestlaufzeit)
+    2. MPPT ungültig/Timeout   (hart)
+    3. Landstrom               (hart)
+    4. (PV(MA)<pvThreshOff UND SoC<socDPlusHigh) ODER SoC<socDPlusOff
+       (weich — bei D+: durch Mindestlaufzeit hemmbar)
+  AUS-Priorität für Gel-Lader:
+    1. BMS ungültig/veraltet   (hart)
+    2. MPPT ungültig/Timeout   (hart)
+    3. (PV(MA)<pvGelMinW UND SoC<socGelHigh) ODER SoC<socGelOn
+       (weich)
+  AUS-Priorität für WR-Remote:
+    1. BMS ungültig/veraltet   (hart)
+    2. Landstrom               (hart)
+    3. SoC < socWROff          (weich)
+  PV-Glättung: MA über LOGIC_PPV_MA_WINDOW = 15 Samples (30s).
+    Bei MPPT-Ausfall: 0 in Puffer schieben → gradueller Rückgang.
+  MPPT-Recovery-Debounce: mppt_ok erst nach LOGIC_MPPT_RECOVERY_MIN
+    = 5 aufeinanderfolgenden gültigen Frames (≈ 10s).
+  D+-Mindestlaufzeit: LOGIC_DPLUS_MIN_ON_MS = 300s (5min).
+    Weiche AUS-Gründe gehemmt; harte sofort.
+  Staleness-Timeout: BMS_STALE_TIMEOUT_MS = 60s (5 v4.x: 10s).
+  Debounce-Zähler: db_dplus, db_gel, db_wr als int8_t, ±N Zyklen.
+  Reason-Strings: char[64]-Puffer + portMUX Spinlock (kein Race).
+
+P-SW11 | LOGGING-ARCHITEKTUR
+  Puffer A — PSRAM Ringpuffer (2s-Rohdaten, 48h):
+    ps_malloc(86400 × 32 Byte) = 2,76 MB PSRAM, zirkulär, s_mutex.
+    Abruf: logger_snapshot(offset, count, step, out) — kurzer Lock.
+  Puffer B — Minuten-Mittelung:
+    Laufender Akkumulator, commit je Minute. Bis zu 60 Zeilen gepuffert.
+    Batch-Flush alle logIntervalMs (Default 900s) oder bei vollem Puffer.
+  SD-Zugriff: alle SD.open/close/read/write unter g_sdMutex.
+    Notfallsicherung: Mutex mit 30ms-Timeout, then best-effort.
+  CSV: Dateiname /log_NNNNN.csv (NNNNN = Tage seit 1970 in MEZ).
+    Zeitstempel = UTC-Epoch intern, MEZ in Dateinamen und Anzeige.
+  Notfallsicherung: logger_emergency_back_up() schreibt offene Minute
+    + Puffer + Crash-Marker (/crash.log) + NVS-Uhrzeit.
+
+P-SW12 | WEBSERVER-ARCHITEKTUR
+  Framework:   ESPAsyncWebServer (non-blocking)
+  HTTP Port:   80 (statische Dateien + REST)
+  WebSocket:   Pfad /ws, Port 80.
+  REST-Endpunkte:
+    GET  /api/live           → aktueller Zustand (JSON)
+    GET  /api/params         → aktuelle Parameter (JSON, 12 Felder)
+    POST /api/params         → Parameter setzen (JSON-Body, max 2kB)
+    POST /api/reset          → Fabrik-Reset
+    POST /api/time           → Browser-Zeit-Sync {"epoch":...}
+    GET  /api/buffer         → Ringpuffer (?offset&count&step)
+    GET  /api/sdfiles        → Liste CSV-Dateien auf SD
+    GET  /api/sddata         → SD-Datei lesen (?file&skip&limit)
+  WebSocket-Broadcast: alle 2s. ws.makeBuffer() + ref-counting.
+    ws.cleanupClients() nur aus WS-Event-Handler (AsyncTCP-Thread).
+  handle_buffer: logger_snapshot → PSRAM + AsyncResponseStream.
+  handle_sddata: Pfad-Validierung, g_sdMutex, col >= 12,
+    AsyncResponseStream.
+  handle_sdfiles: unter g_sdMutex.
+  handle_time: bool clock_set_epoch() ausgewertet.
+  collect_body_chunk(): Multi-Chunk-POST-Akkumulation.
+
+P-SW13 | DASHBOARD (data/index.html)  [GEÄNDERT]
+  Technologie: Reines HTML5/CSS3/JavaScript, keine externen Libraries.
+  Tabs: Live | Verlauf | System | Einstellungen
+  Kopf: Verbindungsstatus, Echtzeit-Uhr in MEZ, SD-Status,
+        Puffergröße, Laufzeit.
+  Live-Tab:
+    - SoC als SVG-Bogen mit Farbwechsel (grün/orange/rot)
+    - BMS-Karte (V/I/P, Temperaturen, SoC, Kapazität, MOSFET-Status)
+    - MPPT-Karte (PV-Leistung, Ladezustand, Tagesertrag, Max heute)
+    - Live-Graph: 6 Metriken (SoC, Spannung, Strom, PV-Leistung,
+      PV-Spannung, Rest-Ah), 5 Zeitfenster (30m/2h/6h/24h/48h),
+      HH:MM-Achse in MEZ, Gradient-Fill
+  Verlauf-Tab:
+    - SD-Dateiliste via /api/sdfiles
+    - History-Graph aus /api/sddata (bis 2.000 Punkte)
+  System-Tab:
+    - 4 Aktor-Kacheln (Grund, Debounce, socHigh-Info)
+    - System-Status (Puffer, SD, Frame-/Fehlerzähler, Laufzeit)
+  Einstellungen-Tab:
+    - Formular für alle 12 NVS-Parameter
+    - Speichern → POST /api/params, Fabrik-Reset → POST /api/reset
+  Zeit-Sync: POST /api/time bei Connect und alle 5 min.
+
+P-SW14 | VARIABLE PARAMETER (NVS, Namespace "womo_cfg")  [GEÄNDERT]
+  Key                   Default   Einheit  Grenzen       Gruppe
+  ─────────────────────────────────────────────────────────────────
+  socDPlusOn            95        %        50–100  }
+  socDPlusOff           80        %        20–95   } D+-Relais
+  socDPlusHigh          90        %        50–100  } (neu v5.0)
+  pvThresholdOn         150       W        10–2000 }
+  pvThresholdOff        100       W        0–1990  }
+  ─────────────────────────────────────────────────────────────────
+  socGelOn              82        %        50–100  }
+  socGelHigh            90        %        50–100  } Gel-Lader
+  pvGelMinW             60        W        0–500   } (neu v5.0)
+  ─────────────────────────────────────────────────────────────────
+  socWROn               95        %        50–100  }
+  socWROff              80        %        20–95   } Wechselrichter
+  ─────────────────────────────────────────────────────────────────
+  relayDebounceCycles   10        Zyklen   1–60
+  logIntervalMs         900000    ms       60000–3600000
+  ─────────────────────────────────────────────────────────────────
+  Plausibilitätsgrenzen werden geprüft (Wertebereich je Parameter).
+  Keine erzwungene ON > OFF Cross-Validierung (entfällt ab v5.0).
+  socGelOff entfällt — harte AUS-Schwelle = socGelOn (82%).
+  pvWRThresholdOn/Off entfallen — WR ist rein SoC-gesteuert.
+
+P-SW15 | SICHERHEITS-IMPLEMENTIERUNGEN  [GEÄNDERT]
+  1.  Watchdog zweistufig: HW-WDT(4s) + SW-WDT (BMS/MPPT/Logger).
+  2.  Fail-Safe GPIO: Sicher-Zustand VOR pinMode(OUTPUT).
+  3.  Debounce: 10 Zyklen Mindeststabilität vor Relais-Änderung.
+  4.  Mutex-Timeouts: nie blockierend > 200ms.
+  5.  JSON-Größenbegrenzung: max. 2000 Einträge pro API-Anfrage.
+  6.  Heap-Monitor: Warnung bei < 20kB freiem SRAM.
+  7.  PSRAM static_assert: Compile-Fehler wenn LogEntry != 32 Byte.
+  8.  SD-Datei sofort schließen nach Schreibvorgang.
+  9.  Plausibilitätsgrenzen bei allen params_set_*() Funktionen.
+  10. Zeitplausibilität: Epoch < 2024 wird verworfen (clock_set_epoch).
+  11. BMS-Staleness: g_bms.valid + millis()-Differenz < 60s.
+  12. MPPT-Staleness: valid + !timeout + millis()-Differenz.
+  13. Pfad-Validierung in handle_sddata: "/" am Anfang, kein "..".
+  14. POST-Body-Limit: > 2048 Byte → HTTP 413.
+
+P-SW16 | BEKANNTE OFFENE PUNKTE (SOFTWARE)  [GEÄNDERT]
+  1. RTC: DS3231 an I2C GPIO 1/2 geplant und reserviert — noch nicht
+     bestückt. Bis dahin Browser-Sync + NVS-Persistenz.
+  2. WR-Sniffer (Edecoa): inverter.cpp bleibt Stub in v5.0.
+     → Phase 2: Protokoll-Analyse nach Logic-Analyzer-Messung
+       der RJ12-Pins. Kein Zeitplan.
+  3. BMS-Byte-Offsets: Protokoll-Doku verifiziert (v5.0).
+     Strom-Skalierung: 0.01A/Bit per Doku ✓
+     0x79-Triplets: 1 Byte Index + 2 Bytes mV per Doku ✓
+     Temp-Kodierung: 0-140, >100 negativ per Doku ✓
+     0xAA Nennkapazität: Einheit Ah direkt per Doku ✓ (Doku: "4 HEX AH")
+     Strom 0x84: JK FW V11.287H → int16 Zweierkomplement, +=Laden ✓
+     Alle Protokoll-Parameter verifiziert und abgeschlossen.
+  4. VE.Direct HEX TX: in v5.0 implementiert (Register 0x2003,
+     sn16 °C×100, 10s-Intervall, N/A-Fallback bei BMS-Timeout).
+     Erste Hardware-Verifikation der MPPT-Reaktion ausstehend.
+  5. WebSocket Thread-Safety: vollständige Lösung erfordert FreeRTOS-
+     Queue aus der ein Callback im AsyncTCP-Thread liest.
+  6. Delphi FireMonkey App (Phase 2): BLE 5.0 oder REST/WebSocket-API,
+     Android + Windows, Read-Only + Reset.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ÄNDERUNGSPROTOKOLL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+─── v4.3 → v5.0 ─────────────────────────────────────────────────
+
+  DATENERFASSUNG:
+  • L-SW01: BMS-Datenumfang reduziert (Zellspannungen, Zyklenanzahl,
+    Balancingstatus, Alarm-/Schutz-Bitmasks entfernt — bewusst).
+    [L-SW01, P-SW08, P-SW13]
+  • L-SW02: MPPT-Felder reduziert (VPV, LOAD/IL, H19, H22/H23, HSDS,
+    PID, FW, SER# entfernt); VE.Direct HEX TX für BMS-Kerntemperatur
+    hinzugefügt (P-SW09, P-SW04). [L-SW02, P-SW04, P-SW09]
+
+  SCHALTLOGIK:
+  • L-SW03/P-SW10: Staleness-Timeout BMS+MPPT von 10s auf 60s erhöht.
+    Neue AUS-Formel D+: (PV<pvThreshOff UND SoC<socDPlusHigh) ODER
+    SoC<socDPlusOff — PV allein löst kein AUS mehr aus (erst in
+    Kombination mit niedrigem SoC). Neuer Parameter: socDPlusHigh.
+  • L-SW04/P-SW10: pvGelMinW 30W→60W; neue AUS-Formel Gel:
+    (PV<pvGelMinW UND SoC<socGelHigh) ODER SoC<socGelOn.
+    socGelOff entfernt (hard AUS = socGelOn = 82%).
+    Neuer Parameter: socGelHigh (Default 90%).
+  • L-SW05: PV-Schwellwerte für WR entfernt — rein SoC-basiert.
+    pvWRThresholdOn/Off entfernt. [P-SW14]
+
+  ZEITBASIS:
+  • L-SW19: Zeitzone MEZ (UTC+1) festgelegt, keine Sommerzeit.
+    Zeitstempel intern UTC, Anzeige+Dateinamen in MEZ.
+    Uhr-Zurückdrehen durch Browser erlaubt (kein Monotonizitätsschutz).
+
+  HARDWARE/GPIO:
+  • P-SW03: GPIO 42 → UART2 TX (MPPT VE.Direct HEX, neu).
+    GPIO 1 (SDA) + GPIO 2 (SCL) → DS3231 I2C (reserviert).
+    GPIO 3 als Strapping nicht mehr fälschlich in Reserve.
+
+  KONFIGURATION:
+  • P-SW14: 12 statt 13 Parameter. +socDPlusHigh +socGelHigh
+    −socGelOff −pvWRThresholdOn −pvWRThresholdOff, pvGelMinW 30→60W.
+  • L-SW14/P-SW15: Cross-Validierung (ON > OFF-Pflicht) entfernt.
+
+  DASHBOARD:
+  • P-SW13/L-SW12: Alarm-Box, Zellspannungsbalken, Schutzparameter,
+    Balancer-Anzeige aus Dashboard entfernt (Daten nicht mehr gelesen).
+    Metrikliste: 7→6 (Zell-Δ entfernt).
+
+─── v4.2 → v4.3 ─────────────────────────────────────────────────
+  • Hysterese wiederhergestellt, BMS-Staleness, !mppt_ok AUS-Bedingung,
+    WR-eigene PV-Parameter, PV-Glättung (MA 30s), MPPT-Recovery-Debounce,
+    D+-Mindestlaufzeit 5min, Cross-Core-Race Reason-Strings gefixt,
+    g_sdMutex, logger_snapshot, AsyncResponseStream, col>=12,
+    clock_set_epoch bool, 64-Bit-Zeitbasis, platformio.ini gepinnt.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ERSTELLTE QUELLDATEIEN (Stand v5.0)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ✓ platformio.ini            (gepinnte Abhängigkeiten, unverändert)
+  ✓ partitions_16mb.csv       (kein OTA, unverändert)
+  ✓ src/config.h              (GEÄNDERT v5.0: socDPlusHigh, socGelHigh,
+                               BMS_STALE_TIMEOUT_MS=60s, Timezone)
+  ✓ src/params.h   ✓ src/params.cpp   (GEÄNDERT v5.0: 12 Parameter,
+                               socGelOff entfernt, *High neu, pvWR entfernt)
+  ✓ src/bms.h      ✓ src/bms.cpp      (GEÄNDERT v5.0: reduziertes JSON)
+  ✓ src/mppt.h     ✓ src/mppt.cpp     (GEÄNDERT v5.0: HEX-TX Temperatur,
+                               GPIO 42 TX, reduzierte Felder)
+  ✓ src/inverter.h ✓ src/inverter.cpp (Stub, unverändert)
+  ✓ src/io.h       ✓ src/io.cpp       (unverändert)
+  ✓ src/logic.h    ✓ src/logic.cpp    (GEÄNDERT v5.0: neue AUS-Formeln,
+                               socDPlusHigh, socGelHigh, Timeout 60s)
+  ✓ src/logger.h   ✓ src/logger.cpp   (unverändert ggü. v4.3)
+  ✓ src/clock.h    ✓ src/clock.cpp    (GEÄNDERT v5.0: MEZ+1, kein Monoton.)
+  ✓ src/watchdog.h ✓ src/watchdog.cpp (unverändert)
+  ✓ src/http_server.h ✓ src/http_server.cpp  (GEÄNDERT v5.0: 12 Parameter)
+  ✓ src/main.cpp              (unverändert)
+  ✓ data/index.html           (GEÄNDERT v5.0: Dashboard ohne Zellspannungen,
+                               Alarm-Box, Schutzparameter; 6 Metriken; MEZ)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
