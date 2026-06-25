@@ -1,7 +1,8 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║     LASTEN- UND PFLICHTENHEFT — SOFTWARE                        ║
-║     Womo Energy Core v5.0                                        ║
-║     Stand: Code-Audit + Vollkorrektur + Erweiterung HEX-TX      ║
+║     Womo Energy Core v5.1                                        ║
+║     Stand: DS3231-RTC produktiv + CAN-BMS-Alternative +          ║
+║            RGB-Rundlauf-Encoding + Hardware-Inbetriebnahme      ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -17,7 +18,9 @@ L-SW01 | DATENAKQUISITION BMS  [GEÄNDERT]                    [MUSS]
   MOSFET-Status (Laden/Entladen).
   Abfrage-Intervall: 2 Sekunden.
   Byte-Offsets und Skalierungsfaktoren nach Erstbetrieb mit echten
-  Roh-Frames verifizieren (BMS_DEBUG_RAW=1 in bms.cpp).
+  Roh-Frames verifiziert (BMS_DEBUG_RAW=1 in bms.cpp) — siehe P-SW16.
+  Alternative Anbindung (v5.1, optional, Compile-Zeit-Auswahl):
+  CAN-Bus statt RS485 — identischer JSON-Output, siehe P-SW17.
 
 L-SW02 | DATENAKQUISITION MPPT  [GEÄNDERT]                  [MUSS]
   Die Software liest folgende VE.Direct Text Protocol Felder des
@@ -177,39 +180,81 @@ L-SW18 | DELPHI FIREMONKEY APP (PHASE 2)                  [SOLLTE]
   Implementierung nach Fertigstellung der ESP32-Firmware.
   Anforderungen: Live-Daten, historische Charts, Read-Only + Reset.
 
-L-SW19 | ZEITBASIS (QUASI-ECHTZEIT OHNE RTC)  [GEÄNDERT]  [MUSS]
+L-SW19 | ZEITBASIS (DS3231-RTC FÜHREND)  [GEÄNDERT v5.1]  [MUSS]
   Die Zeit ist immer MEZ (UTC+1) — keine Sommerzeitumstellung.
-  Das System hat keine Hardware-RTC. Die Echtzeit wird vom Browser
-  geliefert (POST /api/time beim Verbinden und periodisch). Der ESP
-  rechnet daraus einen Epoch-Offset und sichert die laufende Zeit im
-  NVS. Nach einem Boot wird von der zuletzt gespeicherten Zeit
-  fortgesetzt (Stillstandszeit geht verloren; Korrektur beim nächsten
-  Browser-Sync). Allererster Boot: Start bei Firmware-Build-Zeit.
+  Das System besitzt eine DS3231-Hardware-RTC (I2C, GPIO 1/2),
+  seit v5.1 bestückt und produktiv. Sie ist die führende Zeitquelle
+  und übersteht Stromausfälle eigenständig (Pufferbatterie) — eine
+  Browserverbindung ist für korrekte Zeit nicht mehr erforderlich.
+  Fallback-Kette: DS3231 → NVS (zuletzt bekannte Zeit) → Firmware-
+  Build-Zeit (nur beim allerersten Boot ohne gestellte RTC, OSF-Flag).
+  Browser-Sync (POST /api/time) bleibt als bequeme Stellmöglichkeit
+  und Drift-Korrektur erhalten und schreibt zusätzlich die DS3231-
+  Hardware-Uhr. Tägliche Resync gegen DS3231 bei lokalem Tageswechsel
+  inkl. Drift-Messung (Soll- vs. Ist-Zeit in Sekunden).
   Alle Log-Zeitstempel (RAM und CSV) nutzen UTC-Epoch intern.
   Dashboard-Anzeige und Dateinamen werden auf MEZ (UTC+1) umgerechnet.
-  Zeitbasis intern: esp_timer_get_time() (64-Bit µs, kein Überlauf).
-  Der Browser darf die Uhr zurückdrehen — bestehende zukünftige
-  CSV-Zeitstempel werden durch spätere korrekte Werte überschrieben.
-  clock_set_epoch() gibt bool zurück (false = Epoch unplausibel < 2024).
-  Driftfreie, browserunabhängige Zeit erst mit DS3231-RTC,
-  für die GPIO 1 (SDA) und GPIO 2 (SCL) reserviert sind.
+  Zeitbasis intern: gekapselter, Spinlock-geschützter esp_timer-Zähler
+  (64-Bit µs) zwischen den seltenen I2C-Lesevorgängen — vermeidet
+  I2C-Bus-Zugriff bei jedem clock_now()-Aufruf.
+  clock_set_epoch() gibt bool zurück (false = Epoch unplausibel < 2024)
+  und stellt zusätzlich die DS3231-Hardware-Uhr.
+  RTC-Health (10s gecacht, kein I2C-Zugriff je Webanfrage): JSON
+  {present, valid, drift, temp} über clock_rtc_json() — present =
+  DS3231 antwortet aktuell auf I2C, valid = Zeit plausibel gesetzt
+  (kein OSF), drift = Sekunden-Abweichung beim letzten Resync,
+  temp = Chip-interne Temperatur (DS3231 kann KEINE Batteriespannung
+  über I2C melden — das ist eine Hardware-Grenze des Bausteins).
+  Hardware-Hinweis: I2C-Initialisierung erfordert delay(100) nach
+  Wire.begin() + 3 Versuche Retry-Loop in clock_init() (DS3231 lieferte
+  beim Kaltstart sonst sporadisch I2C-Timeout/Error 263).
+  32K- und SQW-Pins der DS3231 bleiben unbeschaltet (Open-Drain,
+  unkritisch) — keine Alarm-Interrupt-Funktion in v5.1 genutzt.
+
+L-SW20 | STATUS-ANZEIGE ON-BOARD RGB-LED  [NEU v5.1]       [SOLLTE]
+  Die On-board-RGB-LED (WS2812, GPIO 48) zeigt den Zustand aller
+  relevanten Sensoren/Aktoren gleichzeitig und gleichberechtigt an —
+  kein einzelner Prioritätszustand verdrängt einen anderen (Ausnahme:
+  Heap-Warnung, siehe unten). Jeder Kanal bekommt eine feste Position
+  in einem wiederkehrenden zeitlichen Muster ("Rundlauf"); ob ein
+  Kanal aktiv ist, erkennt man an Position + Farbe, nicht an
+  Verdrängung anderer Zustände.
+  Kanäle (fixe Reihenfolge): BMS-Fehler, MPPT-Fehler, SoC-Gauge
+  (immer sichtbar, farbcodiert nach Schwellwerten), Landstrom,
+  D+ Kühlschrank, Gel-Lader, WR-Remote.
+  Sonderfall Heap-Warnung: bei kritisch wenig freiem SRAM wird die
+  LED unmittelbar und ohne auf den Rundlauf zu warten magenta
+  geschaltet — Selbstschutz-Signal, keine Wartezeit erlaubt.
+  Start-/Bootzustand: weiß, bis die Schaltlogik erstmals ausgewertet
+  wurde. Implementierungsdetails siehe P-SW18.
 
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 TEIL 2 — PFLICHTENHEFT (Wie ist die Software umgesetzt?)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-P-SW01 | PLATTFORM UND ENTWICKLUNGSUMGEBUNG
+P-SW01 | PLATTFORM UND ENTWICKLUNGSUMGEBUNG  [GEÄNDERT v5.1]
   Hardware:    ESP32-S3 DevKitC-1 N16R8 (16MB Flash, 8MB Octal PSRAM)
   Framework:   Arduino (über PlatformIO + VS Code)
   Board-ID:    esp32-s3-devkitc-1
   Platform:    espressif32 @ ^6.9.0  ← GEPINNT (Arduino-Core 2.x,
                IDF 4.4). Arduino-Core 3.x / IDF 5 bricht die
                esp_task_wdt_init(uint32_t, bool)-Signatur von watchdog.cpp.
+  KRITISCH (Inbetriebnahme-Erkenntnis): board_upload.flash_size UND
+               board_build.flash_size MÜSSEN BEIDE auf 16MB gesetzt sein.
+               Fehlt der upload-Key, meldet der Bootloader-Header 8MB,
+               während partitions_16mb.csv auf 16MB ausgelegt ist →
+               Bootloader verwirft die Partitionstabelle, Endlos-Reset
+               ohne App-Ausgabe (nur ROM-Zeilen im Monitor). Zusätzlich
+               board_build.arduino.memory_type=qio_opi für Octal-PSRAM
+               erforderlich. Bei Partitionsänderung: pio run -t erase
+               vor dem nächsten Upload.
   Partition:   Eigene partitions_16mb.csv — KEIN OTA (Single-App):
                nvs 20kB | app0 4MB (factory) | spiffs ~11,8MB |
                coredump 128kB
   Filesystem:  LittleFS (Partition-Label "spiffs", Web-Dateien: index.html)
+               Eigener Build-Schritt nötig: pio run -t uploadfs
+               (unabhängig vom Firmware-Upload).
   Build-Flags: -DBOARD_HAS_PSRAM -DARDUINO_USB_MODE=1
                -DARDUINO_USB_CDC_ON_BOOT=1
   Libraries:   ← ALLE MIT OWNER UND VERSION GEPINNT:
@@ -218,18 +263,24 @@ P-SW01 | PLATTFORM UND ENTWICKLUNGSUMGEBUNG
                bblanchon/ArduinoJson        @ ^6.21.5
                FS, SD, LittleFS
                ESPAsyncTCP explizit ausgeschlossen (ESP8266-Fork).
+  CAN-Build (optional, BMS_USE_CAN): build_flags = -D BMS_USE_CAN,
+               build_src_filter = +<*> -<bms.cpp> (siehe P-SW17).
 
-P-SW02 | PROJEKTSTRUKTUR (QUELLDATEIEN)
+P-SW02 | PROJEKTSTRUKTUR (QUELLDATEIEN)  [GEÄNDERT v5.1]
   src/config.h          GPIO-Konstanten + DEFAULT_-Parameter +
                         LOGIC_-Tuning-Konstanten (MA, Recovery, Min-on)
   src/params.h/.cpp     NVS-Verwaltung (12 Parameter)
   src/bms.h/.cpp        JK-BMS RS485 Parser (ID-Tabelle, 16-Bit-CHK)
+  src/bmscan.h/.cpp     JK-BMS CAN-Parser — Compile-Zeit-Alternative
+                        zu bms.cpp, identischer JSON-Output (v5.1, neu)
   src/mppt.h/.cpp       VE.Direct Text-Parser + HEX-TX Temperatur
   src/inverter.h/.cpp   WR-Sniffer Stub (RJ12, Protokoll offen)
-  src/io.h/.cpp         GPIO-Init, Aktoren, Landstrom-Sensor
-  src/logic.h/.cpp      Schaltlogik (Hysterese, MA, Recovery, Min-on)
+  src/io.h/.cpp         GPIO-Init, Aktoren, Landstrom-Sensor,
+                        RGB-LED-Rundlauf-Task (v5.1)
+  src/logic.h/.cpp      Schaltlogik (Hysterese, MA, Recovery, Min-on),
+                        setzt RGB-Kanalmaske (v5.1)
   src/logger.h/.cpp     PSRAM-Ringpuffer + SD-Logging + g_sdMutex
-  src/clock.h/.cpp      Zeitdienst (64-Bit-Basis, MEZ+1)
+  src/clock.h/.cpp      Zeitdienst (DS3231-RTC führend, v5.1 produktiv)
   src/watchdog.h/.cpp   Software-Modulüberwachung BMS/MPPT/Logger
   src/http_server.h/.cpp HTTP-Server, WebSocket, REST-API (Streaming)
   src/main.cpp          Setup, FreeRTOS-Tasks, HW-Watchdog
@@ -237,9 +288,9 @@ P-SW02 | PROJEKTSTRUKTUR (QUELLDATEIEN)
   partitions_16mb.csv   Partitionstabelle (kein OTA)
   platformio.ini        Build-Konfiguration (gepinnte Abhängigkeiten)
 
-P-SW03 | GPIO-BELEGUNG (FINAL, ESP32-S3 N16R8)  [GEÄNDERT]
-  GPIO  1   → I2C SDA   DS3231 RTC (reserviert, nicht bestückt)
-  GPIO  2   → I2C SCL   DS3231 RTC (reserviert, nicht bestückt)
+P-SW03 | GPIO-BELEGUNG (FINAL, ESP32-S3 N16R8)  [GEÄNDERT v5.1]
+  GPIO  1   → I2C SDA   DS3231 RTC (bestückt, produktiv seit v5.1)
+  GPIO  2   → I2C SCL   DS3231 RTC (bestückt, produktiv seit v5.1)
   GPIO  4   → frei (ADC1, für analoge Erweiterungen)
   GPIO  5   → frei (ADC1, für analoge Erweiterungen)
   GPIO  6–10→ frei (ADC1, für analoge Erweiterungen)
@@ -248,8 +299,8 @@ P-SW03 | GPIO-BELEGUNG (FINAL, ESP32-S3 N16R8)  [GEÄNDERT]
   GPIO 13   → SPI MOSI  SD-Karte
   GPIO 14   → SPI MISO  SD-Karte
   GPIO 15   → DE/RE     MAX485 (Richtungssteuerung RS485)
-  GPIO 16   → UART1 RX  JK-BMS empfangen
-  GPIO 17   → UART1 TX  JK-BMS senden (Query-Frame)
+  GPIO 16   → UART1 RX  JK-BMS empfangen (Standard) / CAN RX (alt.)
+  GPIO 17   → UART1 TX  JK-BMS senden (Standard) / CAN TX (alt.)
   GPIO 18   → INPUT     Landstrom-Sensor (Optokoppler, PULLUP)
   GPIO 21   → OUTPUT    D+-Relais Kühlschrank (Active-LOW)
   GPIO 38   → UART2 RX  VE.Direct MPPT Text-Protokoll (RX-only Pfad)
@@ -257,14 +308,16 @@ P-SW03 | GPIO-BELEGUNG (FINAL, ESP32-S3 N16R8)  [GEÄNDERT]
               HINWEIS: Standard-JTAG (MTCK). Nutzbar da USB-JTAG aktiv.
   GPIO 40   → OUTPUT    WR-Remote Optokoppler (Active-HIGH)
   GPIO 41   → OUTPUT    Status-LED (einfache LED, extern)
-  GPIO 48   → OUTPUT    On-board RGB-LED WS2812 (Status, neu v5.0)
+  GPIO 48   → OUTPUT    On-board RGB-LED WS2812 (Rundlauf-Encoding,
+              GEÄNDERT v5.1 — siehe L-SW20/P-SW18)
   GPIO 42   → UART2 TX  VE.Direct MPPT HEX-Protokoll (TX, neu v5.0)
               HINWEIS: Standard-JTAG (MTMS). Nutzbar da USB-JTAG aktiv.
               3,3V Pegel — MPPT VE.Direct-Eingang ist 3,3V-kompatibel,
               kein Pegelwandler für TX-Richtung erforderlich.
   GESPERRT: 0,3,19,20,26-37,45,46 (Strapping/Flash/USB/PSRAM)
   RESERVIERT ANALOG: GPIO 4–10 (ADC1-sicher, für Erweiterungen)
-  RESERVIERT I2C:    GPIO 1 (SDA) + GPIO 2 (SCL) für DS3231
+  GPIO 16/17 bei CAN-Build (BMS_USE_CAN): MAX485 entfällt, statt-
+    dessen CAN-Transceiver (z. B. SN65HVD230, 3,3V) an denselben Pins.
 
 P-SW04 | SERIELLE SCHNITTSTELLEN  [GEÄNDERT]
   UART1 (BMS):  GPIO 16 RX / 17 TX, 115200 Baud, 8N1
@@ -319,8 +372,10 @@ P-SW07 | DATENSTRUKTUREN  [GEÄNDERT]
   Params (params.h): 12 NVS-Parameter, global als g_params.
     Neu in v5.0: socDPlusHigh, socGelHigh.
     Entfernt: socGelOff (= socGelOn), pvWRThresholdOn, pvWRThresholdOff.
-  Zeit (clock.cpp): esp_timer_get_time()-Offset + Sync-Status,
-    NVS-persistent (Namespace "clock"), Zeitzone MEZ (UTC+1).
+  Zeit (clock.cpp): DS3231-RTC führend (I2C), NVS-Fallback, Spinlock-
+    geschützter esp_timer-Laufzeitzähler zwischen I2C-Lesevorgängen.
+    10s gecachte Health-Werte {present,valid,drift,temp} für Webtask.
+    Zeitzone MEZ (UTC+1), produktiv seit v5.1 (siehe L-SW19).
 
 P-SW08 | JK-BMS PROTOKOLL-IMPLEMENTIERUNG  [GEÄNDERT]
   Query-Frame (21 Byte, Checksum 0x0129):
@@ -398,6 +453,10 @@ P-SW11 | LOGGING-ARCHITEKTUR
     Batch-Flush alle logIntervalMs (Default 900s) oder bei vollem Puffer.
   SD-Zugriff: alle SD.open/close/read/write unter g_sdMutex.
     Notfallsicherung: Mutex mit 30ms-Timeout, then best-effort.
+  HARDWARE-HINWEIS (ESP32-S3): SD.begin(CS) allein nutzt NICHT die
+    konfigurierten Pins. Explizite Initialisierung erforderlich:
+    static SPIClass sdSPI(FSPI); sdSPI.begin(CLK,MISO,MOSI,CS);
+    SD.begin(CS, sdSPI) — Reihenfolge CLK/MISO/MOSI/CS beachten.
   CSV: Dateiname /log_NNNNN.csv (NNNNN = Tage seit 1970 in MEZ).
     Zeitstempel = UTC-Epoch intern, MEZ in Dateinamen und Anzeige.
   Notfallsicherung: logger_emergency_back_up() schreibt offene Minute
@@ -424,6 +483,9 @@ P-SW12 | WEBSERVER-ARCHITEKTUR
   handle_sdfiles: unter g_sdMutex.
   handle_time: bool clock_set_epoch() ausgewertet.
   collect_body_chunk(): Multi-Chunk-POST-Akkumulation.
+  HARDWARE-HINWEIS: server.on()-API-Routen MÜSSEN vor serveStatic("/")
+    registriert werden — sonst Fallthrough zu LittleFS, API-Aufrufe
+    laufen ins Leere (404 statt JSON).
 
 P-SW13 | DASHBOARD (data/index.html)  [GEÄNDERT]
   Technologie: Reines HTML5/CSS3/JavaScript, keine externen Libraries.
@@ -488,12 +550,22 @@ P-SW15 | SICHERHEITS-IMPLEMENTIERUNGEN  [GEÄNDERT]
   13. Pfad-Validierung in handle_sddata: "/" am Anfang, kein "..".
   14. POST-Body-Limit: > 2048 Byte → HTTP 413.
 
-P-SW16 | BEKANNTE OFFENE PUNKTE (SOFTWARE)  [GEÄNDERT]
-  1. RTC: DS3231 an I2C GPIO 1/2 geplant und reserviert — noch nicht
-     bestückt. Bis dahin Browser-Sync + NVS-Persistenz.
-  2. WR-Sniffer (Edecoa): inverter.cpp bleibt Stub in v5.0.
+P-SW16 | BEKANNTE OFFENE PUNKTE (SOFTWARE)  [GEÄNDERT v5.1]
+  ERLEDIGT SEIT v5.1:
+   • RTC: DS3231 an I2C GPIO 1/2 bestückt und produktiv — führende
+     Zeitquelle, übersteht Stromausfälle eigenständig (siehe L-SW19).
+
+  OFFEN:
+  1. Physische RS485-Verkabelung MAX485 ↔ JK-BMS (3-Pin A/B/GND am
+     CAN/RS485-Port, NICHT am GPS/UART-Port mit TTL-Pegel) steht noch
+     aus — aktuell nächster Hardware-Meilenstein. Bis dahin ist ein
+     Red-Blink-Fehler am BMS-Kanal erwartetes Verhalten, kein Bug.
+     GND vor dem Anschließen mit Multimeter verifizieren; BMS-Menü
+     auf Protokoll "RS485 Modbus" stellen.
+  2. WR-Sniffer (Edecoa): inverter.cpp bleibt Stub.
      → Phase 2: Protokoll-Analyse nach Logic-Analyzer-Messung
-       der RJ12-Pins. Kein Zeitplan.
+       der RJ12-Pins, alternativ Ersatzgerät mit zugänglichem
+       RS485/Modbus- oder EG8010-Interface. Kein Zeitplan.
   3. BMS-Byte-Offsets: Protokoll-Doku verifiziert (v5.0).
      Strom-Skalierung: 0.01A/Bit per Doku ✓
      0x79-Triplets: 1 Byte Index + 2 Bytes mV per Doku ✓
@@ -508,10 +580,116 @@ P-SW16 | BEKANNTE OFFENE PUNKTE (SOFTWARE)  [GEÄNDERT]
      Queue aus der ein Callback im AsyncTCP-Thread liest.
   6. Delphi FireMonkey App (Phase 2): BLE 5.0 oder REST/WebSocket-API,
      Android + Windows, Read-Only + Reset.
+  7. Remote-Telemetrie (Phase 2, geplant, noch keine Entscheidung):
+     SIM7080G (UART-angebunden, TinyGSM + MQTT über TLS) vs.
+     Walter-Board (ESP32-S3 + Sequans GM02SP, TLS/MQTT im Modem
+     selbst). Serverseitige Dashboard-Architektur würde die PSRAM-
+     Pufferanforderung am Gerät reduzieren. IoT-SIM-Kandidaten:
+     1NCE (Einmalgebühr, 500MB/10 Jahre, 170+ Länder), melita.io
+     (Pay-per-Use), Telekom Smart Connect S.
+
+P-SW17 | JK-BMS CAN-BUS-ALTERNATIVE (bmscan.h/.cpp)  [NEU v5.1]
+  Zweck: Alternative Anbindung zum JK-BMS über CAN statt RS485, falls
+  CAN bevorzugt oder RS485-Wiring nicht praktikabel ist. 100% aufruf-
+  und antwortkompatibel zu bms.h — identische Struct BMSData,
+  identische globale Symbole g_bms/g_bmsMutex, identische Funktionen
+  bms_init()/bms_poll()/bms_to_json(), identischer JSON-Output
+  (gleiche Keys/Formate) — austauschbar ohne Änderung an logic.cpp,
+  http_server.cpp oder dem Dashboard.
+  Quelle: JIKONG "BMS-CAN communication protocol" V1.02 (20190428).
+  Protokoll: CAN 2.0A, Standard-Frame (11-Bit), 250 kbit/s,
+  Little-Endian. BMS sendet zyklisch (Push) — kein Polling/Query,
+  im Gegensatz zur RS485-Variante.
+  Treiber: ESP-IDF TWAI (native CAN), LISTEN_ONLY-Modus, RX-Queue-
+  Tiefe 64 (BATT_ST-Frame alle ~20ms, Queue wird je Poll-Zyklus
+  komplett geleert, neueste Werte behalten).
+  Frame-Matching: auf FUNC-Nibble der 11-Bit-ID (ID = FUNC<<8 | SA),
+  NICHT auf volle ID — Workaround für einen JK-Firmware-Bug, bei dem
+  sich die CAN-ID nach Adresswechsel nicht zuverlässig aktualisiert.
+  Stromkonvention: CAN-Doku definiert + = ENTLADEN / − = LADEN
+  (invers zur RS485-Variante) — wird intern invertiert, damit
+  logic.cpp unverändert für beide Varianten funktioniert.
+  Temperatur-Mapping (CAN liefert Max/Min/Avg statt 3 Einzelsensoren):
+  tempMOS←MaxCellTemp, tempSensor1←MinCellTemp, tempSensor2←AvgCellTemp
+  (AvgCellTemp ist der Wert, der per HEX-TX an den MPPT geht).
+  Nicht im CAN-Protokoll enthalten → fest 0/false: nominalCapacityAh,
+  remainingCapacityAh, chargeMOSFETEnabled, dischargeMOSFETEnabled.
+  Auswahl (Compile-Zeit, beide Implementierungen bleiben im Repo):
+    Standard-Build → bms.cpp aktiv (bmscan.cpp inaktiv via #ifdef
+                     BMS_USE_CAN, keine Symbol-Kollision).
+    CAN-Build      → platformio.ini: build_flags = -D BMS_USE_CAN,
+                     build_src_filter = +<*> -<bms.cpp>
+                     (bms.cpp aus dem Build nehmen, sonst doppelte
+                     Symbole für g_bms/bms_init/etc.)
+  Pin-Wiederverwendung: CAN-Transceiver (z. B. SN65HVD230, 3,3V) an
+  denselben Pins wie MAX485 (GPIO 16/17), Override in config.h möglich.
+
+P-SW18 | RGB-LED RUNDLAUF-ENCODING (io.h/.cpp, logic.cpp)  [NEU v5.1]
+  Ersetzt das bisherige einfache Status-Schema (v5.0: GPIO 48 nur als
+  "Status"-LED ohne dokumentierte Prioritätslogik) durch ein
+  Rundlauf-Encoding: jeder Sensor/Aktor bekommt einen eigenen,
+  zyklisch wiederkehrenden Slot fester Länge, statt dass ein Zustand
+  einen anderen verdrängt. Slot-POSITION = Kanal-Identität — so ist
+  erkennbar, WELCHER Kanal aktiv ist, unabhängig davon wie viele
+  andere Kanäle gleichzeitig aktiv sind.
+  Slot-Reihenfolge (fix, led_task() in io.cpp):
+    0 BMS-Fehler | 1 MPPT-Fehler | 2 SoC-Gauge (immer sichtbar,
+    farbcodiert: rot < RGB_SOC_GAUGE_CRIT_PCT, orange < LOW_PCT,
+    gelb < MID_PCT, sonst grün) | 3 Landstrom | 4 D+ Kühlschrank |
+    5 Gel-Lader | 6 WR-Remote.
+  Datenfluss: g_rgbChannelMask (32-Bit, Bits 0–5 = Flags BMS/MPPT/
+  Landstrom/D+/Gel/WR, Bits 8–15 = SoC%) wird atomar in EINEM
+  Schreibvorgang von logic_evaluate() gesetzt und vom LED-Render-Task
+  (Core 0, eigene FreeRTOS-Task) gelesen — vermeidet Races durch
+  Single-Word-Read/Write ohne Mutex-Overhead für 7 Einzelwerte.
+  Sonderfall Heap-Alert: g_rgbHeapAlert (von loop() bei Heap-Mangel
+  gesetzt) hat im LED-Task Vorrang vor dem Rundlauf — magenta, sofort,
+  ohne auf einen Zyklus-Slot zu warten. Bewusste Ausnahme: kein
+  Betriebszustand, sondern ein Selbstschutz-Signal vor drohendem
+  Heap-Crash.
+  Bootzustand: RGB_BOOT (weiß) bis logic_evaluate() erstmals läuft,
+  danach RGB_RUNNING (Rundlauf aktiv).
+  Ansteuerung: neopixelWrite() (Arduino-Core 2.x, RMT-basiert, keine
+  externe Library), global gedimmt über RGB_LED_BRIGHTNESS (0–255,
+  Nachtsicht-Tauglichkeit im Womo), nur aus dem LED-Render-Task
+  angesprochen (Single-Thread, RMT-sicher).
+  Status auch im REST/WS-JSON sichtbar (io_to_json(): rgb-Objekt mit
+  bms_fault, mppt_fault, soc, landstrom, d_plus, gel_lader, wr_remote).
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ÄNDERUNGSPROTOKOLL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+─── v5.0 → v5.1 ─────────────────────────────────────────────────
+
+  ZEITBASIS:
+  • L-SW19: DS3231-RTC bestückt und produktiv — führende Zeitquelle
+    statt reiner Browser-Sync. Fallback-Kette DS3231→NVS→Build-Zeit.
+    Health-JSON {present,valid,drift,temp} (clock_rtc_json()).
+    Hardware-Fix: delay(100) + 3×-Retry nach Wire.begin() (I2C-Timeout
+    beim Kaltstart, Error 263). [L-SW19, P-SW03, P-SW07, P-SW16]
+
+  BMS-ANBINDUNG:
+  • Neu: bmscan.h/.cpp — CAN-Bus-Alternative zu bms.cpp/RS485, 100%
+    kompatibler JSON-Output, Compile-Zeit-Auswahl via BMS_USE_CAN.
+    [L-SW01, P-SW02, P-SW17]
+
+  STATUS-ANZEIGE:
+  • RGB-LED von einfachem Status-Schema auf Rundlauf-Encoding
+    umgestellt: alle 7 Kanäle (BMS/MPPT/SoC/Landstrom/D+/Gel/WR)
+    gleichberechtigt in festen Slots statt Prioritätsverdrängung.
+    Heap-Alert bleibt Sonderfall (sofort, magenta). Neuer Parameter
+    g_rgbChannelMask (Bitmask) ersetzt g_rgbState (Enum) als primären
+    Zustand. [L-SW20, P-SW03, P-SW18]
+
+  HARDWARE-INBETRIEBNAHME (Erkenntnisse, kein API-Bruch):
+  • N16R8-Boot-Loop: board_upload.flash_size UND board_build.flash_size
+    müssen beide 16MB sein, sonst verwirft der Bootloader die
+    Partitionstabelle (Endlos-Reset ohne App-Ausgabe). [P-SW01]
+  • SD.begin(CS) nutzt auf dem ESP32-S3 nicht automatisch die
+    konfigurierten SPI-Pins — explizite SPIClass(FSPI) nötig. [P-SW11]
+  • Webserver: API-Routen müssen vor serveStatic("/") registriert
+    werden, sonst Fallthrough zu LittleFS (404 statt JSON). [P-SW12]
 
 ─── v4.3 → v5.0 ─────────────────────────────────────────────────
 
@@ -563,25 +741,32 @@ P-SW16 | BEKANNTE OFFENE PUNKTE (SOFTWARE)  [GEÄNDERT]
     clock_set_epoch bool, 64-Bit-Zeitbasis, platformio.ini gepinnt.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-ERSTELLTE QUELLDATEIEN (Stand v5.0)
+ERSTELLTE QUELLDATEIEN (Stand v5.1)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ✓ platformio.ini            (gepinnte Abhängigkeiten, unverändert)
+  ✓ platformio.ini            (gepinnte Abhängigkeiten; optional
+                               BMS_USE_CAN für CAN-Build, siehe P-SW17)
   ✓ partitions_16mb.csv       (kein OTA, unverändert)
-  ✓ src/config.h              (GEÄNDERT v5.0: socDPlusHigh, socGelHigh,
-                               BMS_STALE_TIMEOUT_MS=60s, Timezone)
+  ✓ src/config.h              (v5.1: GPIO 1/2 jetzt produktiv (DS3231),
+                               RGB-Rundlauf-Konstanten)
   ✓ src/params.h   ✓ src/params.cpp   (GEÄNDERT v5.0: 12 Parameter,
                                socGelOff entfernt, *High neu, pvWR entfernt)
   ✓ src/bms.h      ✓ src/bms.cpp      (GEÄNDERT v5.0: reduziertes JSON)
+  ✓ src/bmscan.h   ✓ src/bmscan.cpp   (NEU v5.1: CAN-Alternative zu
+                               bms.cpp, identischer JSON-Output, siehe P-SW17)
   ✓ src/mppt.h     ✓ src/mppt.cpp     (GEÄNDERT v5.0: HEX-TX Temperatur,
                                GPIO 42 TX, reduzierte Felder)
   ✓ src/inverter.h ✓ src/inverter.cpp (Stub, unverändert)
-  ✓ src/io.h       ✓ src/io.cpp       (unverändert)
-  ✓ src/logic.h    ✓ src/logic.cpp    (GEÄNDERT v5.0: neue AUS-Formeln,
-                               socDPlusHigh, socGelHigh, Timeout 60s)
-  ✓ src/logger.h   ✓ src/logger.cpp   (unverändert ggü. v4.3)
-  ✓ src/clock.h    ✓ src/clock.cpp    (GEÄNDERT v5.0: MEZ+1, kein Monoton.)
+  ✓ src/io.h       ✓ src/io.cpp       (GEÄNDERT v5.1: RGB-Rundlauf-
+                               Encoding statt Prioritäts-Enum, siehe P-SW18)
+  ✓ src/logic.h    ✓ src/logic.cpp    (GEÄNDERT v5.1: setzt
+                               g_rgbChannelMask statt g_rgbState)
+  ✓ src/logger.h   ✓ src/logger.cpp   (unverändert ggü. v4.3; SD-SPI-
+                               Hinweis ESP32-S3 siehe P-SW11)
+  ✓ src/clock.h    ✓ src/clock.cpp    (GEÄNDERT v5.1: DS3231 produktiv,
+                               führende Zeitquelle statt Browser-Sync)
   ✓ src/watchdog.h ✓ src/watchdog.cpp (unverändert)
-  ✓ src/http_server.h ✓ src/http_server.cpp  (GEÄNDERT v5.0: 12 Parameter)
+  ✓ src/http_server.h ✓ src/http_server.cpp  (GEÄNDERT v5.0: 12 Parameter;
+                               Routenreihenfolge-Hinweis siehe P-SW12)
   ✓ src/main.cpp              (unverändert)
   ✓ data/index.html           (GEÄNDERT v5.0: Dashboard ohne Zellspannungen,
                                Alarm-Box, Schutzparameter; 6 Metriken; MEZ)

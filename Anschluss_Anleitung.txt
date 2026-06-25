@@ -1,0 +1,268 @@
+╔══════════════════════════════════════════════════════════════════╗
+║   ANSCHLUSS-ANLEITUNG — WOMO ENERGY CORE / GODMODULE              ║
+║   Sensoren & Aktoren, Modul für Modul                            ║
+║   Basis: Pflichtenheft v5.1 + config.h                           ║
+║   Stand: Hardware-Entscheidungen eingearbeitet —                 ║
+║     • D+ und Gel-Lader über 2× Joy-it COM-MOSFET (IRF9540N)      ║
+║     • RS485-Modul mit Auto-DE/RE (GPIO 15 frei)                  ║
+║     • Gel-Lader-Strombegrenzung über 1Ω/10W-Drahtwiderstand     ║
+║     • Sperrdioden (SR560) gegen Rückströme an D+ und Gel-Lader   ║
+║     • Sicherungen: D+ 1A, Gel-Lader 3A                          ║
+║     • DS3231-RTC bestückt und produktiv (war: reserviert)        ║
+╚══════════════════════════════════════════════════════════════════╝
+
+WICHTIG — VOR DEM VERDRAHTEN LESEN
+──────────────────────────────────────────────────────────────────
+• Der ESP32-S3 ist NICHT 5V-tolerant (max. ~3,6V je GPIO). Betrifft
+  hier noch die VE.Direct-RX-Leitung → Spannungsteiler Pflicht
+  (Modul 3). Die MAX485-RO-Leitung ist laut Aufbau unkritisch.
+• Alle Massen (Buck-GND, ESP-GND, BMS-GND, MPPT-GND, Aktor-GND)
+  auf EINEN gemeinsamen Sternpunkt. Ohne gemeinsame Masse keine
+  serielle Kommunikation und kein definierter MOSFET-Gate-Pegel.
+• ZWEI Diodenarten — nicht verwechseln:
+    SPERRDIODE   = in REIHE mit der Last, gegen RÜCKSTROM/Rückspeisung
+                   (Ring/Kathode zeigt zur Last). Hier an D+ und Gel.
+    FREILAUFDIODE= PARALLEL über eine induktive Last, gegen
+                   Abschalt-Spannungsspitzen (Ring/Kathode an +).
+• Active-Level (final, siehe config.h-Block am Ende):
+    D+-MOSFET = HIGH | Gel-MOSFET = HIGH | WR-Remote = HIGH | LED = HIGH
+
+──────────────────────────────────────────────────────────────────
+MODUL 0 — VERSORGUNG (12V → 5V → 3,3V)
+──────────────────────────────────────────────────────────────────
+Baustein: Step-Down-Wandler HW-688 (Platine oben, mit USB).
+  12V-Bordnetz  →  Wandler-IN (+ / −)
+  Wandler-OUT 5V  →  ESP32-S3  Pin "5V" / "VIN"
+  Wandler-GND     →  ESP32-S3  GND  (= Sternpunkt-Masse)
+Hinweis:
+  • Wandler auf 5,0–5,1V einstellen, BEVOR der ESP angesteckt wird.
+  • SR560-Schottky in Reihe in die 12V-Zuleitung als VERPOLSCHUTZ
+    (Ring/Kathode Richtung Wandler). 6,8µF-Folie (WIMA) als Stütz-C.
+  • Haupt-Sicherung (3–5A) vor dem Wandler dringend empfohlen.
+
+──────────────────────────────────────────────────────────────────
+MODUL 1 — ESP32-S3 DevKitC-1 N16R8 (Zentrale)
+──────────────────────────────────────────────────────────────────
+Versorgung: 5V/VIN + GND vom Wandler.
+On-board: GPIO 48 → RGB-LED (WS2812) — NICHTS zu verdrahten.
+Monitor/Flash: USB-C (CDC, 115200 Baud).
+Gesperrte Pins NICHT belegen: 0,3,19,20,26–37,45,46.
+
+──────────────────────────────────────────────────────────────────
+MODUL 2 — JK-BMS über MAX485 (RS485, UART1, AUTO-DE/RE)
+──────────────────────────────────────────────────────────────────
+Baustein: MAX485-Modul MIT automatischer Richtungsumschaltung.
+→ KEINE DE/RE-Steuerleitung nötig, GPIO 15 bleibt frei.
+ESP  →  MAX485:
+  GPIO 17 (UART1 TX)   →  DI
+  GPIO 16 (UART1 RX)   →  RO
+  VCC  →  5V   (Modul 5V-tauglich, RO-Pegel laut Aufbau ok)
+  GND  →  Sternpunkt
+  (DE/RE schaltet das Modul selbst — nicht verdrahten.)
+MAX485  →  JK-BMS:
+  A → BMS A | B → BMS B | GND → BMS GND
+  WICHTIG: Am JK-BMS-Gehäuse gibt es ZWEI Ports — diese 3-polige
+  differenzielle A/B/GND-Buchse ist der CAN/RS485-Port. NICHT den
+  GPS-Port verwenden (führt TTL-UART/VBAT, keine RS485-Pegel).
+  GND vor dem Anschließen mit Multimeter gegen Sternpunkt prüfen.
+  Im BMS-Menü das Protokoll auf "RS485 Modbus" stellen.
+Parameter: 115200 Baud, 8N1. Query-Frame alle 2000ms.
+HINWEIS Auto-Direction-Timing: bei 115200 beim Erstbetrieb prüfen,
+  ob die ERSTEN Antwortbytes vollständig ankommen (BMS_DEBUG_RAW=1).
+  Fehlende Anfangsbytes → Modul mit echtem Auto-Dir-Chip (MAX13487).
+FIRMWARE: manuelles DE/RE-Toggle in bms.cpp wird No-Op (GPIO 15).
+  Belassbar als Fallback oder entfernen.
+ALTERNATIVE (Compile-Zeit, optional): Statt RS485 kann das BMS auch
+  über CAN angebunden werden (bmscan.cpp, Pflichtenheft P-SW17).
+  Dann sitzt an GPIO 16/17 statt MAX485 ein CAN-Transceiver
+  (z. B. SN65HVD230, 3,3V) — Modul 2 entfällt dann komplett.
+
+──────────────────────────────────────────────────────────────────
+MODUL 3 — Victron MPPT über VE.Direct (UART2, RX + TX)
+──────────────────────────────────────────────────────────────────
+VE.Direct-Stecker (4-polig): GND, TX (aus MPPT), RX (in MPPT), +Vcc.
+→ +Vcc NICHT anschließen!
+
+EMPFANG (RX) — MPPT-TX → ESP GPIO 38 über Teiler 5V→3,3V:
+     MPPT-TX  ──[ 1kΩ ]──┬── GPIO 38
+                         │
+                       [ 2kΩ ]
+                         │
+                        GND
+SENDEN (TX) — ESP GPIO 42 → MPPT-RX (DIREKT, kein Pegelwandler).
+  Zweck: BMS-Kerntemperatur (Reg 0x2003) für temp.-komp. Laden.
+Masse: MPPT-GND → Sternpunkt.
+Parameter: 19200 Baud, 8N1. VictronConnect TX-Modus "VE.Direct".
+
+──────────────────────────────────────────────────────────────────
+MODUL 4 — Landstrom-Sensor (PC817-Optokoppler)  [EINGANG]
+──────────────────────────────────────────────────────────────────
+Baustein: PC817-Modul (Schraubklemme INPUT, Header OUT/GND).
+  INPUT + → + HDR-15-5   |   INPUT − → GND HDR-15-5
+  OUT → GPIO 18 (INPUT_PULLUP)   |   GND → Sternpunkt
+Erstbetrieb prüfen: bedeutet HIGH wirklich "Landstrom vorhanden"?
+
+──────────────────────────────────────────────────────────────────
+MODUL 5 — SD-Karte (SPI)
+──────────────────────────────────────────────────────────────────
+  GPIO 11 → CS | GPIO 12 → CLK | GPIO 13 → MOSI | GPIO 14 → MISO
+  VCC → 5V | GND → Sternpunkt. Karte FAT32.
+
+──────────────────────────────────────────────────────────────────
+MODUL 6 — D+ Kühlschrank → Joy-it COM-MOSFET  [Active-HIGH]
+──────────────────────────────────────────────────────────────────
+Baustein: Joy-it COM-MOSFET (IRF9540N, P-Kanal, HIGH-SIDE).
+  Daten: Steuerspannung min. 2V (3,3V-GPIO ok), max. 36V, MAX. 2A.
+  JST: 1=GND 2=VCC 3=NC 4=SIG.
+Last: D+ ist NUR Trigger-Signal (das interne Kühlschrank-Relais führt
+  den Heizstrom) → < 2A, bestätigt. Modul mehr als ausreichend.
+
+  ESP-Seite (JST):
+    SIG → GPIO 21 | VCC → 3,3–5V | GND → Sternpunkt
+  Last-Seite (mit Sicherung + Sperrdiode):
+    12V-Quelle ──[ Sicherung 1A ]── Klemme IN
+    Klemme OUT ──[ SR560: Anode an MOSFET, Ring/Kathode → Kühlschrank ]──
+               → D+-Eingang Kühlschrank
+    GND Kühlschrank → Sternpunkt
+
+  SPERRDIODE (SR560, gegen Rückstrom): verhindert, dass über die
+    D+-Leitung Spannung aus dem Fahrzeug/Kühlschrank in den
+    geschalteten Bus zurückgespeist wird. Ring/Kathode → Kühlschrank.
+  FREILAUFDIODE (nur falls D+-Eingang induktiv, z.B. Relaisspule):
+    zusätzlich eine SR560 PARALLEL über die Last (Ring/Kathode an +).
+  FAIL-SAFE: prüfen, dass das Modul bei SIG=low AUS ist (L-SW07),
+    auch während ESP-Boot.
+
+──────────────────────────────────────────────────────────────────
+MODUL 7 — Gel-Lader Starterbatterie → Joy-it COM-MOSFET [Active-HIGH]
+──────────────────────────────────────────────────────────────────
+Baustein: Joy-it COM-MOSFET (IRF9540N, P-Kanal, HIGH-SIDE)
+  + 10W/1Ω-Drahtwiderstand (Strombegrenzung)
+  + SR560-Sperrdiode (gegen Rückspeisung)
+  + 3A-Sicherung.
+Ansteuerung: GPIO 39, ACTIVE-HIGH (passt zu config.h, keine Änderung).
+
+  ESP-Seite (JST):
+    SIG → GPIO 39 | VCC → 3,3–5V | GND → Sternpunkt
+  Last-Seite (Reihenfolge wichtig):
+    12V-Bus ─[ Sicherung 3A ]─ Klemme IN
+    Klemme OUT ─[ 1Ω/10W ]─[ SR560: Anode an R, Ring/Kathode → Gel+ ]─
+               → + Starter-/Gel-Batterie
+    Gel-Batterie − → Sternpunkt / Bordmasse
+
+  SPERRDIODE (SR560) — WICHTIG bei diesem Pfad:
+    Der P-Kanal-MOSFET hat eine interne Body-Diode (Drain→Source).
+    Im AUS-Zustand kann Strom RÜCKWÄRTS fließen, wenn die
+    Starterbatterie höher steht als der Hausbus (Lichtmaschine lädt
+    Starter auf 14,4V, Hausbus sackt ab) → Rückspeisung trotz
+    MOSFET AUS. Die SR560 in Reihe (Ring/Kathode → Gel+) blockiert das.
+  STROMBEGRENZUNG (1Ω/10W):
+    Strom ≈ (V_Bus − V_Gel − 0,5V_Schottky) / (1Ω + 0,12Ω_FET).
+    Normal ~1–2A, selbstbegrenzend. Bei 2A: 1Ω verheizt 4W (10W-Typ
+    → 2,5× Reserve). Worst Case (Gel tief entladen + Bus 14,4V):
+    kurz ~2,5A, R ~6W (< 10W), 3A-Sicherung hält, FET tolerant.
+  SPANNUNGSABFALL: 1Ω (≈2V@2A) + SR560 (≈0,5V) + FET (≈0,2V).
+    Für Erhaltungsladung unkritisch, reduziert nur die Endspannung
+    geringfügig.
+  MONTAGE: Drahtwiderstand wird warm (~60–90°C @ 4W) → mit Luftspalt,
+    NICHT flach auf Lochraster, weg von WIMA-Folie/Kabeln.
+
+──────────────────────────────────────────────────────────────────
+MODUL 8 — Wechselrichter-Remote (Optokoppler-Ausgang) [Active-HIGH]
+──────────────────────────────────────────────────────────────────
+Ansteuerung: GPIO 40, ACTIVE-HIGH. Potenzialfreier Schaltkontakt.
+  ESP-Seite:  GPIO 40 ─[ ~330Ω ]─ PC817 Anode | PC817 Kathode → GND
+  WR-Seite:   PC817 Kollektor → WR-Remote (+) | Emitter → WR-Remote-GND
+HINWEIS: erfordert einen ZWEITEN Optokoppler (Modul-4-PC817 ist als
+  Landstrom-Eingang belegt). Bare PC817 + 330Ω genügt.
+
+──────────────────────────────────────────────────────────────────
+MODUL 9 — Status-LED (einfache LED)  [Active-HIGH]
+──────────────────────────────────────────────────────────────────
+  GPIO 41 ─[ ~330Ω ]─ LED-Anode | LED-Kathode → GND
+
+──────────────────────────────────────────────────────────────────
+MODUL 10 — On-board RGB-LED (WS2812)
+──────────────────────────────────────────────────────────────────
+GPIO 48 — fest auf dem DevKit. NICHTS zu verdrahten.
+
+──────────────────────────────────────────────────────────────────
+MODUL 11 — DS3231 RTC (I2C)  [BESTÜCKT, PRODUKTIV — führende Zeit]
+──────────────────────────────────────────────────────────────────
+  GPIO 1 (SDA) → DS3231 SDA | GPIO 2 (SCL) → DS3231 SCL
+  VCC → 3,3V | GND → Sternpunkt.
+  32K- und SQW-Pins NICHT verbinden — beide Open-Drain, unkritisch
+  unbeschaltet (32K = unbenutzter 32,768kHz-Ausgang, SQW hat auf den
+  meisten Breakout-Modulen schon einen eigenen Pull-up).
+  Die RTC ist die führende Zeitquelle (Pufferbatterie übersteht
+  Stromausfälle) — Browser-Sync bleibt als Stellmöglichkeit/Drift-
+  Korrektur erhalten, ist aber für korrekte Zeit nicht mehr nötig.
+  HINWEIS Erstbetrieb: delay(100) nach Wire.begin() + 3×-Retry in
+  clock_init() — der DS3231 lieferte beim Kaltstart sonst sporadisch
+  einen I2C-Timeout (Error 263).
+
+══════════════════════════════════════════════════════════════════
+GPIO-GESAMTTABELLE
+══════════════════════════════════════════════════════════════════
+  GPIO  1   I2C SDA    DS3231 (bestückt, produktiv)
+  GPIO  2   I2C SCL    DS3231 (bestückt, produktiv)
+  GPIO 11   SPI CS     SD-Karte
+  GPIO 12   SPI CLK    SD-Karte
+  GPIO 13   SPI MOSI   SD-Karte
+  GPIO 14   SPI MISO   SD-Karte
+  GPIO 15   FREI       (RS485 Auto-DE/RE — nicht belegt)
+  GPIO 16   UART1 RX   JK-BMS (von MAX485 RO)
+  GPIO 17   UART1 TX   JK-BMS (zu MAX485 DI)
+  GPIO 18   INPUT      Landstrom-Sensor (PULLUP)
+  GPIO 21   OUTPUT     D+ COM-MOSFET Kühlschrank   [Active-HIGH] *geändert
+  GPIO 38   UART2 RX   VE.Direct MPPT (Teiler 1k/2k)
+  GPIO 39   OUTPUT     Gel-Lader COM-MOSFET        [Active-HIGH]
+  GPIO 40   OUTPUT     WR-Remote Optokoppler       [Active-HIGH]
+  GPIO 41   OUTPUT     Status-LED                  [Active-HIGH]
+  GPIO 42   UART2 TX   VE.Direct MPPT HEX (direkt)
+  GPIO 48   OUTPUT     On-board RGB-LED (WS2812)
+  GESPERRT: 0,3,19,20,26–37,45,46
+  FREI/ADC: 4–10 (analog), 15 (digital)
+
+══════════════════════════════════════════════════════════════════
+NÖTIGE config.h-ÄNDERUNGEN
+══════════════════════════════════════════════════════════════════
+  // D+ über Joy-it COM-MOSFET (P-Kanal, High-Side, Active-HIGH):
+  #define RELAY_D_PLUS_ACTIVE        HIGH        // war LOW
+
+  // RS485-Modul mit Auto-DE/RE → GPIO 15 entfällt:
+  // #define GPIO_RS485_DE_RE        15          // ungenutzt, GPIO 15 frei
+
+  // Gel-Lader bleibt Active-HIGH (GPIO 39) — KEINE Änderung.
+
+══════════════════════════════════════════════════════════════════
+SPERR-/SCHUTZBESCHALTUNG — ÜBERSICHT
+══════════════════════════════════════════════════════════════════
+  D+-Pfad :  12V ─[1A]─ MOSFET ─[SR560 →Kühlschrank]─ D+-Eingang
+  Gel-Pfad:  12V ─[3A]─ MOSFET ─[1Ω/10W]─[SR560 →Gel+]─ Gel-Batterie+
+  SR560-Orientierung: Ring (Kathode) immer zur LAST/Batterie zeigend.
+  Verpolschutz Versorgung: SR560 in Reihe, Ring Richtung Wandler.
+
+══════════════════════════════════════════════════════════════════
+PRÜF-CHECKLISTE VOR ERSTINBETRIEBNAHME
+══════════════════════════════════════════════════════════════════
+[ ] Wandler liefert 5,0–5,1V (gemessen, OHNE ESP)
+[ ] Verpolschutz (SR560) + Haupt-Sicherung im 12V-Pfad
+[ ] Gemeinsame Masse (Sternpunkt) für ALLE Module
+[ ] MAX485: Auto-DE/RE, GPIO 15 NICHT verdrahtet
+[ ] BMS-RS485: richtigen Port (CAN/RS485, NICHT GPS) verwendet,
+    GND mit Multimeter geprüft, BMS-Menü auf "RS485 Modbus" gestellt
+[ ] VE.Direct-RX-Teiler 1kΩ+2kΩ, +Vcc NICHT verbunden
+[ ] VE.Direct-TX (GPIO 42) direkt, VictronConnect "VE.Direct"
+[ ] config.h: RELAY_D_PLUS_ACTIVE = HIGH
+[ ] D+: 1A-Sicherung + SR560-Sperrdiode (Ring → Kühlschrank)
+[ ] Gel: 3A-Sicherung + 1Ω/10W + SR560-Sperrdiode (Ring → Gel+)
+[ ] Gel-Widerstand mit Luftspalt montiert
+[ ] SR560-Orientierung an beiden Pfaden geprüft (Ring = Kathode)
+[ ] COM-MOSFETs: SIG=low → AUS (Fail-Safe geprüft)
+[ ] WR-Remote: zweiter Optokoppler + 330Ω
+[ ] Status-LED + Vorwiderstand | SD-Karte FAT32
+[ ] Erststart: Module EINZELN zuschalten, im Monitor verifizieren
+[ ] BMS_DEBUG_RAW=1: Frame-Verifikation + Auto-DE/RE-Turnaround
+══════════════════════════════════════════════════════════════════
+Ende — Basis Pflichtenheft v5.1 + Hardware-Entscheidungen
