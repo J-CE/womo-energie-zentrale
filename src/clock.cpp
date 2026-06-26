@@ -277,12 +277,19 @@ uint32_t clock_now() {
 }
 
 // ── Lokaler Offset (s) für einen UTC-Zeitpunkt — DST-korrekt ───
-// localtime_r füllt tm_gmtoff gemäß gesetztem POSIX-TZ (inkl. Sommerzeit).
+// localtime_r liefert die lokalen Wanduhr-Felder gemäß gesetztem
+// POSIX-TZ (inkl. Sommerzeit). tm_gmtoff ist in dieser newlib-Variante
+// NICHT verfügbar — daher die Wanduhr-Felder mit der eigenen,
+// zeitzonenfreien ymd_to_epoch() als UTC interpretieren und gegen die
+// echte UTC differenzieren. Ergebnis = lokaler Offset inkl. DST.
 int32_t clock_local_offset_at(uint32_t utc) {
     time_t t = (time_t)utc;
     struct tm lt;
     localtime_r(&t, &lt);
-    return (int32_t)lt.tm_gmtoff;
+    uint32_t localAsUtc = ymd_to_epoch(lt.tm_year + 1900, lt.tm_mon + 1,
+                                       lt.tm_mday, lt.tm_hour,
+                                       lt.tm_min, lt.tm_sec);
+    return (int32_t)(localAsUtc - utc);
 }
 
 uint32_t clock_now_local() {
