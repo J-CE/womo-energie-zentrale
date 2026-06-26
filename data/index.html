@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     index.html — Womo Energy Core v5.0
-     Dashboard: BMS · MPPT · Schaltlogik · Logging · Parameter
+     index.html — Womo Energy Core v5.1
+     Dashboard: BMS · MPPT · Schaltlogik · Logging · Parameter · Zeitzone
      Eingebettet in LittleFS, erreichbar via http://192.168.4.1
      WLAN AP: GODMODULE (Passwort: BM-hy678)
      ============================================================ -->
@@ -120,6 +120,9 @@
     font-family:var(--mono);font-size:16px;padding:9px 11px;border-radius:8px;min-width:0}
   .field input:focus{outline:2px solid var(--akku);outline-offset:-1px}
   .field .unit{color:var(--muted);font-size:13px;font-family:var(--mono)}
+  .field select{flex:1;background:var(--bg);border:1px solid var(--line2);color:var(--txt);font:inherit;
+    padding:9px 10px;border-radius:8px}
+  .field select:focus{outline:2px solid var(--akku);outline-offset:-1px}
   .actions{grid-column:1/-1;display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:4px}
   button.btn{font:inherit;font-weight:700;font-size:14px;padding:11px 20px;border-radius:10px;cursor:pointer;border:1px solid transparent}
   button.btn.primary{background:var(--akku);color:#06120f;border-color:var(--akku)}
@@ -272,9 +275,6 @@
           <span class="k">MPPT Frames</span><span class="v" id="sMfc">–</span>
           <span class="k">Freier Heap</span><span class="v" id="sHeap">–</span>
           <span class="k">Freier PSRAM</span><span class="v" id="sPsram">–</span>
-          <span class="k">RTC (DS3231)</span><span class="v" id="sRtc">–</span>
-          <span class="k">RTC-Drift (24 h)</span><span class="v" id="sDrift">–</span>
-          <span class="k">RTC-Temperatur</span><span class="v" id="sTemp">–</span>          
           <span class="k">Laufzeit</span><span class="v" id="sUp">–</span>
           <span class="k">Wechselrichter</span><span class="v" id="sInv">Stub</span>
         </div>
@@ -319,11 +319,37 @@
         </div>
       </form>
     </div>
+
+    <div class="card wide">
+      <div class="ch"><h2>Zeitzone</h2><span class="badge">Anzeige · Sommerzeit automatisch</span></div>
+      <div class="params">
+        <div class="field"><label>Zeitzone (nur Anzeige)</label>
+          <div class="hint">Intern/SD wird immer UTC gespeichert. Umschaltung MEZ↔MESZ erfolgt automatisch.</div>
+          <div class="ip"><select id="tzSel">
+            <option value="CET-1CEST,M3.5.0,M10.5.0/3">Mitteleuropa — Berlin/Wien (MEZ/MESZ)</option>
+            <option value="WET0WEST,M3.5.0/1,M10.5.0">Westeuropa — Lissabon (WET/WEST)</option>
+            <option value="GMT0BST,M3.5.0/1,M10.5.0">Großbritannien — London (GMT/BST)</option>
+            <option value="EET-2EEST,M3.5.0/3,M10.5.0/4">Osteuropa — Athen/Helsinki (EET/EEST)</option>
+            <option value="UTC0">UTC (ohne Sommerzeit)</option>
+            <option value="__custom">Benutzerdefiniert…</option>
+          </select></div></div>
+        <div class="field" id="tzCustomWrap" style="display:none"><label>POSIX-TZ-String</label>
+          <div class="hint">Format STDoffset[DST,start,end], z. B. NZST-12NZDT,M9.5.0,M4.1.0/3.</div>
+          <div class="ip"><input type="text" id="tzCustom" placeholder="CET-1CEST,M3.5.0,M10.5.0/3" spellcheck="false"></div></div>
+        <div class="field"><label>Aktuell aktiv</label>
+          <div class="hint">Vom Gerät gemeldete Abkürzung und Offset.</div>
+          <div class="ip"><span class="curval" id="tzNow">–</span></div></div>
+        <div class="actions">
+          <button type="button" class="btn primary" id="tzSaveBtn">Zeitzone speichern</button>
+          <button type="button" class="btn ghost" id="tzRevertBtn">Verwerfen</button>
+        </div>
+      </div>
+    </div>
   </section>
 </main>
 
 <div id="toast"></div>
-<div class="foot">GODMODULE · Energy Core v5.0 · WLAN: GODMODULE · http://192.168.4.1 · offline · MEZ</div>
+<div class="foot">GODMODULE · Energy Core v5.1 · WLAN: GODMODULE · http://192.168.4.1 · <span id="footTz">MEZ</span></div>
 
 <script>
 "use strict";
@@ -339,7 +365,7 @@ document.querySelectorAll("nav.tabs button").forEach(b=>{b.onclick=()=>{
   b.classList.add("active");$(b.dataset.view).classList.add("active");
   if(b.dataset.view==="live")loadLive();
   if(b.dataset.view==="hist")loadSdFiles();
-  if(b.dataset.view==="cfg"&&!paramsLoaded)loadParams();
+  if(b.dataset.view==="cfg"){if(!paramsLoaded)loadParams();loadTz();}
 };});
 
 let toastT;function toast(m,k=""){const t=$("toast");t.textContent=m;t.className="show "+k;clearTimeout(toastT);toastT=setTimeout(()=>t.className=t.className.replace("show",""),2600);}
@@ -376,6 +402,7 @@ function render(D){
   gEpoch=D.epoch||0; gBootTs=D.ts||0; gSynced=!!D.synced;
   const gEpochMez=D.epoch_mez||0;
   $("tClock").textContent = (gEpochMez>1704067200) ? (gSynced?"":"~")+new Date(gEpochMez*1000).toLocaleTimeString("de-DE",{timeZone:"UTC"}) : "--:--:--";
+  if(D.tz)$("footTz").textContent=D.tz;
   $("tUp").textContent=uptime(D.ts); $("tBuf").textContent=intf(D.buf);
   $("dSd").className="dot "+(D.sd?"on":"off");
 
@@ -427,17 +454,6 @@ function render(D){
       +` <span style="color:var(--faint)">(min ${(sys.min_heap/1024).toFixed(1)})</span>`;
   } else $("sHeap").textContent="–";
   $("sPsram").textContent=sys.psram!=null?`${(sys.psram/1024/1024).toFixed(2)} MB`:"–";
-  const rtc=D.rtc||{};
-  if(!rtc.present){
-    $("sRtc").innerHTML='<span style="color:var(--bad)">fehlt</span>';
-  }else if(!rtc.valid){
-    $("sRtc").innerHTML='<span style="color:var(--bad)">Batterie leer (OSF)</span>';
-  }else{
-    $("sRtc").innerHTML='<span style="color:var(--ok)">OK</span>';
-  }
-  $("sDrift").textContent = (rtc.drift==null) ? "– (noch kein Sync)"
-      : `${rtc.drift>0?"+":""}${rtc.drift} s`;
-  $("sTemp").textContent = (rtc.temp==null) ? "–" : `${rtc.temp.toFixed(1)} °C`;
   const inv=D.inv||{};$("sInv").textContent=inv.note||"Stub";
 }
 function setSw(id,on){$(id).classList.toggle("on",!!on);}
@@ -579,6 +595,31 @@ $("resetBtn").onclick=async()=>{
   if(!confirm("Alle Parameter auf Werkseinstellungen zurücksetzen?"))return;
   try{const r=await fetch("/api/reset",{method:"POST"});if(r.ok){toast("Werks-Reset durchgeführt","ok");paramsLoaded=false;loadParams();}}
   catch(_){toast("Reset fehlgeschlagen","bad");}
+};
+
+/* ---- Zeitzone ---- */
+function tzKnown(v){return [...$("tzSel").options].some(o=>o.value===v);}
+function fmtOff(off){const s=off<0?"−":"+";const a=Math.abs(off);const h=Math.floor(a/3600);
+  const m=Math.floor((a%3600)/60);return `UTC${off===0?"±0":s+h}:${String(m).padStart(2,"0")}`;}
+function tzSelChanged(){const c=$("tzSel").value==="__custom";$("tzCustomWrap").style.display=c?"":"none";}
+$("tzSel").addEventListener("change",tzSelChanged);
+async function loadTz(){
+  try{const r=await fetch("/api/tz",{cache:"no-store"});const t=await r.json();
+    if(tzKnown(t.tz)){$("tzSel").value=t.tz;$("tzCustom").value="";}
+    else{$("tzSel").value="__custom";$("tzCustom").value=t.tz;}
+    tzSelChanged();
+    $("tzNow").textContent=`${t.abbr||"?"} · ${fmtOff(t.offset||0)}`;
+  }catch(_){$("tzNow").textContent="–";}
+}
+$("tzRevertBtn").onclick=loadTz;
+$("tzSaveBtn").onclick=async()=>{
+  const tz=($("tzSel").value==="__custom")?$("tzCustom").value.trim():$("tzSel").value;
+  if(tz.length<2||tz.length>63){toast("TZ ungültig (2–63 Zeichen)","bad");return;}
+  $("tzSaveBtn").disabled=true;
+  try{const r=await fetch("/api/tz",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({tz})});
+    const res=await r.json();
+    if(r.ok&&res.ok){toast("Zeitzone gespeichert","ok");loadTz();}else toast(res.error||"Fehler","bad");
+  }catch(_){toast("Speichern fehlgeschlagen","bad");}finally{$("tzSaveBtn").disabled=false;}
 };
 
 /* Start */

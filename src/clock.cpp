@@ -1,5 +1,5 @@
 // ============================================================
-//  clock.cpp — Womo Energy Core v5.0
+//  clock.cpp — Womo Energy Core v5.1
 //
 //  Zeitquelle-Hierarchie beim Boot:
 //    1) DS3231 RTC (I2C, GPIO 1/2) — batteriegepuffert, genau
@@ -9,24 +9,29 @@
 //  Im Betrieb zählt esp_timer_get_time() hoch (kein I2C bei
 //  jedem clock_now(); cross-core-sicher via Spinlock).
 //
-//  24h-Resync: einmal täglich kurz nach lokal 0:00 wird die
-//  interne Zeitbasis gegen den genauen DS3231 nachgezogen und
-//  die Drift (intern − RTC) gemessen → Frühwarnung für müde
-//  Pufferbatterie. Läuft im clock_persist()-Tick (logger_task),
-//  NICHT im Notfallpfad (force==true überspringt I2C).
+//  24h-Resync: einmal täglich (UTC-Tageswechsel) wird die interne
+//  Zeitbasis gegen den genauen DS3231 nachgezogen und die Drift
+//  (intern − RTC) gemessen → Frühwarnung für müde Pufferbatterie.
+//  Läuft im clock_persist()-Tick (logger_task), NICHT im
+//  Notfallpfad (force==true überspringt I2C).
 //
 //  RTC-Health (present/OSF/Drift/Temp) wird in clock_persist()
 //  gecacht (throttled 10 s) → build_live_json() liest nur den
 //  Cache, kein I2C im Web-Task, kein Bus-Mutex nötig.
 //
-//  DS3231 hält UTC (= internes Speicherformat). MEZ-Offset nur
-//  für Anzeige/Dateinamen. Kein Monotonizitätsschutz (v5.0).
+//  Zeitzone: DS3231 + interne Basis halten UTC (= Speicherformat).
+//  Der lokale Offset (inkl. Sommerzeit) kommt aus newlib localtime_r,
+//  konfiguriert über einen POSIX-TZ-String (setenv("TZ")+tzset).
+//  Default Europe/Berlin; zur Laufzeit via clock_set_tz() änderbar,
+//  persistiert in NVS "clock"/"tz". Kein Monotonizitätsschutz (v5.0).
 // ============================================================
 #include "clock.h"
 #include "config.h"
 #include <Preferences.h>
 #include <esp_timer.h>
 #include <Wire.h>
+#include <time.h>      // localtime_r, tzset, strftime, struct tm
+#include <stdlib.h>    // setenv
 
 // ── DS3231 ──
 #define DS3231_ADDR        0x68
@@ -47,10 +52,11 @@ static bool     s_rtcPresentLive  = false;  // antwortet aktuell auf I2C
 static float    s_rtcTempC        = 0.0f;
 static bool     s_haveDrift       = false;
 static int32_t  s_lastDriftSec    = 0;       // intern − RTC (+ = intern voraus)
-static uint32_t s_lastResyncDay   = 0;       // lokaler Tag des letzten Resyncs
+static uint32_t s_lastResyncDay   = 0;       // UTC-Tag des letzten Resyncs
 static uint32_t s_lastHealthMs    = 0;
 
 // ── Zeitzonenfreie Epoch <-> Y/M/D (Howard Hinnant; 1970+) ────
+// Nur für DS3231-Roh-BCD (immer UTC). Anzeige-Offset läuft über libc.
 static uint32_t ymd_to_epoch(int Y, int Mo, int D, int h, int m, int s) {
     long y = Y; y -= (Mo <= 2);
     long era = (y >= 0 ? y : y - 399) / 400;
@@ -181,12 +187,25 @@ static void set_base_from_epoch(uint32_t epoch) {
     taskEXIT_CRITICAL(&s_clock_mux);
 }
 
+// ── POSIX-TZ in die libc übernehmen (setenv + tzset) ──────────
+static void apply_tz(const char* tz) {
+    setenv("TZ", tz, 1);
+    tzset();
+}
+
 void clock_init() {
     Wire.begin(I2C_RTC_SDA, I2C_RTC_SCL);
     Wire.setClock(100000);
     delay(100);                  // I2C-Block + DS3231 settlen lassen
 
     cprefs.begin("clock", false);
+
+    // Zeitzone aus NVS laden (Default Europe/Berlin) und an libc übergeben.
+    // Muss VOR jeder localtime_r-Nutzung passieren.
+    String tz = cprefs.getString("tz", DEFAULT_TZ);
+    apply_tz(tz.c_str());
+    Serial.printf("[CLOCK] TZ: %s\n", tz.c_str());
+
     uint32_t nvsBase = cprefs.getULong("epoch", 0);
     uint32_t be      = build_epoch();
 
@@ -218,15 +237,15 @@ void clock_init() {
     s_hasTime = true;
     s_lastPersistEpoch = base;
 
-    // Health-Cache initial füllen + Resync-Tag setzen (kein Sofort-Resync)
+    // Health-Cache initial füllen + Resync-Tag (UTC) setzen (kein Sofort-Resync)
     float t;
     s_rtcPresentLive = ds3231_read_temp(t);
     if (s_rtcPresentLive) s_rtcTempC = t;
-    s_lastResyncDay  = clock_now_local() / 86400UL;
+    s_lastResyncDay  = clock_now() / 86400UL;     // UTC-Tag
 
-    Serial.printf("[CLOCK] Start ~%lu (MEZ: ~%lu)\n",
+    Serial.printf("[CLOCK] Start UTC ~%lu (lokal: ~%lu)\n",
                   (unsigned long)base,
-                  (unsigned long)(base + CLOCK_MEZ_OFFSET_SEC));
+                  (unsigned long)(base + clock_local_offset_at(base)));
 }
 
 bool clock_set_epoch(uint32_t epoch) {
@@ -240,10 +259,10 @@ bool clock_set_epoch(uint32_t epoch) {
     cprefs.putULong("epoch", epoch);
     s_lastPersistEpoch = epoch;
     ds3231_write_epoch(epoch);            // Hardware-Uhr stellen
-    s_lastResyncDay = clock_now_local() / 86400UL;  // heute kein Resync mehr
-    Serial.printf("[CLOCK] Sync UTC=%lu MEZ=%lu\n",
+    s_lastResyncDay = clock_now() / 86400UL;  // heute (UTC) kein Resync mehr
+    Serial.printf("[CLOCK] Sync UTC=%lu lokal=%lu\n",
                   (unsigned long)epoch,
-                  (unsigned long)(epoch + CLOCK_MEZ_OFFSET_SEC));
+                  (unsigned long)(epoch + clock_local_offset_at(epoch)));
     return true;
 }
 
@@ -256,12 +275,46 @@ uint32_t clock_now() {
     taskEXIT_CRITICAL(&s_clock_mux);
     return (uint32_t)((base + esp_timer_get_time()) / 1000000ULL);
 }
-uint32_t clock_now_local()   { return clock_now() + CLOCK_MEZ_OFFSET_SEC; }
 
-// ── 24h-Resync bei lokalem Tageswechsel (nur Normalbetrieb) ───
+// ── Lokaler Offset (s) für einen UTC-Zeitpunkt — DST-korrekt ───
+// localtime_r füllt tm_gmtoff gemäß gesetztem POSIX-TZ (inkl. Sommerzeit).
+int32_t clock_local_offset_at(uint32_t utc) {
+    time_t t = (time_t)utc;
+    struct tm lt;
+    localtime_r(&t, &lt);
+    return (int32_t)lt.tm_gmtoff;
+}
+
+uint32_t clock_now_local() {
+    uint32_t u = clock_now();
+    return u + clock_local_offset_at(u);
+}
+
+// ── Zeitzone setzen / abfragen ────────────────────────────────
+void clock_set_tz(const char* tz) {
+    if (!tz || !*tz) return;
+    cprefs.putString("tz", tz);
+    apply_tz(tz);
+    Serial.printf("[CLOCK] TZ gesetzt: %s\n", tz);
+}
+
+String clock_tz() {
+    return cprefs.getString("tz", DEFAULT_TZ);
+}
+
+String clock_tz_abbr() {
+    time_t t = (time_t)clock_now();
+    struct tm lt;
+    localtime_r(&t, &lt);
+    char z[8] = {0};
+    strftime(z, sizeof(z), "%Z", &lt);   // z. B. "CET" / "CEST"
+    return String(z);
+}
+
+// ── 24h-Resync bei UTC-Tageswechsel (nur Normalbetrieb) ───────
 static void rtc_midnight_resync() {
-    uint32_t today = clock_now_local() / 86400UL;
-    if (today == s_lastResyncDay) return;     // noch kein neuer Tag
+    uint32_t today = clock_now() / 86400UL;   // UTC-Tag (TZ-unabhängig)
+    if (today == s_lastResyncDay) return;      // noch kein neuer Tag
 
     uint32_t rtcEpoch;
     if (ds3231_read_epoch(rtcEpoch)) {

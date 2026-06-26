@@ -32,12 +32,14 @@ static void on_ws_event(AsyncWebSocket* s, AsyncWebSocketClient* c,
 }
 
 static String build_live_json() {
-    char hdr[128];
+    char hdr[160];
+    String tzab = clock_tz_abbr();
     snprintf(hdr, sizeof(hdr),
-        "{\"ts\":%lu,\"epoch\":%lu,\"epoch_mez\":%lu,\"synced\":%s,",
+        "{\"ts\":%lu,\"epoch\":%lu,\"epoch_mez\":%lu,\"tz\":\"%s\",\"synced\":%s,",
         (unsigned long)(millis()/1000),
         (unsigned long)clock_now(),
         (unsigned long)clock_now_local(),
+        tzab.c_str(),
         clock_is_synced()?"true":"false");
     String j = hdr;
     j += "\"bms\":"   + bms_to_json()      + ",";
@@ -136,6 +138,36 @@ static void handle_time(AsyncWebServerRequest* req, uint8_t* data,
               ok?"{\"ok\":true}":"{\"error\":\"Epoch unplausibel (< 2024)\"}");
 }
 
+static void handle_tz_get(AsyncWebServerRequest* req) {
+    char buf[160];
+    String tz = clock_tz();
+    String ab = clock_tz_abbr();
+    snprintf(buf, sizeof(buf),
+        "{\"tz\":\"%s\",\"abbr\":\"%s\",\"offset\":%ld}",
+        tz.c_str(), ab.c_str(),
+        (long)clock_local_offset_at(clock_now()));
+    req->send(200, "application/json", buf);
+}
+
+static void handle_tz_post(AsyncWebServerRequest* req, uint8_t* data,
+                           size_t len, size_t index, size_t total) {
+    char* body = collect_body_chunk(req, data, len, index, total);
+    if (!body) return;
+    StaticJsonDocument<128> doc;
+    if (deserializeJson(doc, body)) {
+        free(body);
+        req->send(400, "application/json", "{\"error\":\"JSON ungültig\"}");
+        return;
+    }
+    const char* tz = doc["tz"] | "";
+    size_t n = strlen(tz);
+    bool ok = (n >= 2 && n < 64);          // POSIX-TZ Plausibilität (Länge)
+    if (ok) clock_set_tz(tz);
+    free(body);
+    req->send(ok?200:400, "application/json",
+              ok?"{\"ok\":true}":"{\"error\":\"TZ ungültig (2..63 Zeichen)\"}");
+}
+
 static void handle_buffer(AsyncWebServerRequest* req) {
     uint32_t offset = req->hasParam("offset") ? req->getParam("offset")->value().toInt() : 0;
     uint32_t count  = req->hasParam("count")  ? req->getParam("count") ->value().toInt() : 900;
@@ -159,7 +191,7 @@ static void handle_buffer(AsyncWebServerRequest* req) {
             "\"cs\":%d,\"err\":%d,\"fl\":%d}",
             i?",":"",
             (unsigned long)e.timestamp,
-            (unsigned long)(e.timestamp + CLOCK_MEZ_OFFSET_SEC),
+            (unsigned long)(e.timestamp + clock_local_offset_at(e.timestamp)),
             e.bmsVoltage/100.0f, e.bmsCurrent/10.0f, e.soc,
             e.tempTube, e.tempSensor1, e.tempSensor2, e.tempMOS,
             e.remainAh10/10.0f, e.pvPower,
@@ -283,6 +315,9 @@ void webserver_init() {
         [](AsyncWebServerRequest* r){}, nullptr, handle_params_post);
     server.on("/api/time", HTTP_POST,
         [](AsyncWebServerRequest* r){}, nullptr, handle_time);
+    server.on("/api/tz",      HTTP_GET,  handle_tz_get);
+    server.on("/api/tz", HTTP_POST,
+        [](AsyncWebServerRequest* r){}, nullptr, handle_tz_post);
 
     // Statischer Catch-all ZULETZT — sonst fängt er /api/* ab
     server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");

@@ -110,9 +110,9 @@ L-SW09 | SD-LOGGING                                        [MUSS]
   Aus den 2s-Rohwerten wird je MINUTE ein arithmetischer Mittelwert
   gebildet (eine CSV-Zeile pro Minute). Minutenzeilen werden gepuffert
   und alle logIntervalMs (Default 15 Minuten) als Batch geschrieben.
-  Dateiformat: CSV, eine Datei pro Kalendertag (/log_NNNNN.csv,
-  NNNNN = Tage seit 1970 in MEZ).
-  Inhalt: Timestamp (Epoch in MEZ, siehe L-SW19), Spannung, Strom,
+  Dateiformat: CSV, eine Datei pro UTC-Kalendertag (/log_NNNNN.csv,
+  NNNNN = Tage seit 1970 in UTC).
+  Inhalt: Timestamp (UTC-Epoch, siehe L-SW19), Spannung, Strom,
   SoC, 4 Temperaturen, Restkapazität, PV-Leistung, PV-Spannung,
   PV-Strom, MPPT-Status, Fehler, Landstrom/Aktoren-Flags.
   Alle SD-Zugriffe aus allen Tasks über g_sdMutex synchronisiert.
@@ -129,7 +129,8 @@ L-SW11 | WEBINTERFACE — LIVE-DASHBOARD                     [MUSS]
   Vier Tabs: Live | Verlauf | System | Einstellungen.
   Anzeige: SoC-Anzeige (SVG-Bogen mit Farbwechsel), alle bekannten
   BMS-Werte, alle bekannten MPPT-Werte, Aktoren-Status.
-  Kopf-Uhr zeigt echte Uhrzeit in MEZ (siehe L-SW19).
+  Kopf-Uhr zeigt echte lokale Uhrzeit (Zeitzone wählbar, Sommerzeit
+  automatisch — siehe L-SW19).
   Responsives Layout für Android-Handy und Windows-PC.
 
 L-SW12 | WEBINTERFACE — LIVE-GRAPH  [GEÄNDERT]            [MUSS]
@@ -138,8 +139,8 @@ L-SW12 | WEBINTERFACE — LIVE-GRAPH  [GEÄNDERT]            [MUSS]
   Zeitfenster wählbar: 30min / 2h / 6h / 24h / 48h.
   Beim ersten Verbinden / bei Auswahl: Vorladung aus RAM-Puffer via
   REST-API. Große Fenster werden serverseitig dezimiert geladen
-  (/api/buffer mit step-Parameter). Zeitachse: echte HH:MM (MEZ) bei
-  synchronisierter Zeit, sonst relativ (-30m … jetzt).
+  (/api/buffer mit step-Parameter). Zeitachse: echte HH:MM (lokale
+  Zeitzone) bei synchronisierter Zeit, sonst relativ (-30m … jetzt).
   Rendering: Pure Canvas JavaScript (offline, keine externen Libs),
   mit Gradient-Fill unter der Linie.
 
@@ -181,7 +182,12 @@ L-SW18 | DELPHI FIREMONKEY APP (PHASE 2)                  [SOLLTE]
   Anforderungen: Live-Daten, historische Charts, Read-Only + Reset.
 
 L-SW19 | ZEITBASIS (DS3231-RTC FÜHREND)  [GEÄNDERT v5.1]  [MUSS]
-  Die Zeit ist immer MEZ (UTC+1) — keine Sommerzeitumstellung.
+  Speicher- und Rechenformat ist IMMER UTC. Anzeige und lokale
+  CSV-Spalte nutzen eine wählbare Zeitzone mit automatischer
+  Sommer-/Winterzeit (DST) — Default Europe/Berlin (MEZ/MESZ).
+  Die Zeitzone wird als vollwertiger POSIX-TZ-String gehalten
+  (newlib setenv("TZ")+tzset()/localtime_r); zur Laufzeit über
+  /api/tz änderbar und in NVS-Namespace "clock"/"tz" persistiert.
   Das System besitzt eine DS3231-Hardware-RTC (I2C, GPIO 1/2),
   seit v5.1 bestückt und produktiv. Sie ist die führende Zeitquelle
   und übersteht Stromausfälle eigenständig (Pufferbatterie) — eine
@@ -190,10 +196,11 @@ L-SW19 | ZEITBASIS (DS3231-RTC FÜHREND)  [GEÄNDERT v5.1]  [MUSS]
   Build-Zeit (nur beim allerersten Boot ohne gestellte RTC, OSF-Flag).
   Browser-Sync (POST /api/time) bleibt als bequeme Stellmöglichkeit
   und Drift-Korrektur erhalten und schreibt zusätzlich die DS3231-
-  Hardware-Uhr. Tägliche Resync gegen DS3231 bei lokalem Tageswechsel
+  Hardware-Uhr. Tägliche Resync gegen DS3231 bei UTC-Tageswechsel
   inkl. Drift-Messung (Soll- vs. Ist-Zeit in Sekunden).
-  Alle Log-Zeitstempel (RAM und CSV) nutzen UTC-Epoch intern.
-  Dashboard-Anzeige und Dateinamen werden auf MEZ (UTC+1) umgerechnet.
+  Alle Log-Zeitstempel (RAM und CSV) und SD-Dateinamen nutzen
+  UTC-Epoch intern. Nur Dashboard-Anzeige und die lokale CSV-Spalte
+  (ts_mez) werden über den TZ-Offset (DST-korrekt) umgerechnet.
   Zeitbasis intern: gekapselter, Spinlock-geschützter esp_timer-Zähler
   (64-Bit µs) zwischen den seltenen I2C-Lesevorgängen — vermeidet
   I2C-Bus-Zugriff bei jedem clock_now()-Aufruf.
@@ -368,14 +375,15 @@ P-SW07 | DATENSTRUKTUREN  [GEÄNDERT]
     heute (H21), Frame-/Timeoutstatus, lastUpdateMs.
   IOState (io.h): Landstrom-Flag, Zustände aller 4 Aktoren.
   LogEntry (logger.h): 32 Byte, __attribute__((packed)), static_assert.
-    Timestamp = UTC Epoch intern (Anzeige in MEZ).
+    Timestamp = UTC-Epoch intern (Anzeige in lokaler Zeitzone, DST).
   Params (params.h): 12 NVS-Parameter, global als g_params.
     Neu in v5.0: socDPlusHigh, socGelHigh.
     Entfernt: socGelOff (= socGelOn), pvWRThresholdOn, pvWRThresholdOff.
   Zeit (clock.cpp): DS3231-RTC führend (I2C), NVS-Fallback, Spinlock-
     geschützter esp_timer-Laufzeitzähler zwischen I2C-Lesevorgängen.
     10s gecachte Health-Werte {present,valid,drift,temp} für Webtask.
-    Zeitzone MEZ (UTC+1), produktiv seit v5.1 (siehe L-SW19).
+    Zeitzone: wählbarer POSIX-TZ-String (DST automatisch), Default
+    Europe/Berlin; UTC intern, lokal nur Anzeige (siehe L-SW19).
 
 P-SW08 | JK-BMS PROTOKOLL-IMPLEMENTIERUNG  [GEÄNDERT]
   Query-Frame (21 Byte, Checksum 0x0129):
@@ -457,8 +465,8 @@ P-SW11 | LOGGING-ARCHITEKTUR
     konfigurierten Pins. Explizite Initialisierung erforderlich:
     static SPIClass sdSPI(FSPI); sdSPI.begin(CLK,MISO,MOSI,CS);
     SD.begin(CS, sdSPI) — Reihenfolge CLK/MISO/MOSI/CS beachten.
-  CSV: Dateiname /log_NNNNN.csv (NNNNN = Tage seit 1970 in MEZ).
-    Zeitstempel = UTC-Epoch intern, MEZ in Dateinamen und Anzeige.
+  CSV: Dateiname /log_NNNNN.csv (NNNNN = Tage seit 1970 in UTC).
+    Zeitstempel ts-Spalte = UTC-Epoch; ts_mez (Anzeige) = lokal/DST.
   Notfallsicherung: logger_emergency_back_up() schreibt offene Minute
     + Puffer + Crash-Marker (/crash.log) + NVS-Uhrzeit.
 
@@ -472,6 +480,8 @@ P-SW12 | WEBSERVER-ARCHITEKTUR
     POST /api/params         → Parameter setzen (JSON-Body, max 2kB)
     POST /api/reset          → Fabrik-Reset
     POST /api/time           → Browser-Zeit-Sync {"epoch":...}
+    GET  /api/tz             → Zeitzone {tz, abbr, offset}
+    POST /api/tz             → POSIX-TZ setzen {"tz":"..."}
     GET  /api/buffer         → Ringpuffer (?offset&count&step)
     GET  /api/sdfiles        → Liste CSV-Dateien auf SD
     GET  /api/sddata         → SD-Datei lesen (?file&skip&limit)
@@ -482,6 +492,8 @@ P-SW12 | WEBSERVER-ARCHITEKTUR
     AsyncResponseStream.
   handle_sdfiles: unter g_sdMutex.
   handle_time: bool clock_set_epoch() ausgewertet.
+  handle_tz_get/post: clock_tz()/clock_set_tz(), Längen-Plausibilität
+    (2..63 Zeichen); ungültiger POSIX-String fällt in libc auf UTC.
   collect_body_chunk(): Multi-Chunk-POST-Akkumulation.
   HARDWARE-HINWEIS: server.on()-API-Routen MÜSSEN vor serveStatic("/")
     registriert werden — sonst Fallthrough zu LittleFS, API-Aufrufe
@@ -490,15 +502,15 @@ P-SW12 | WEBSERVER-ARCHITEKTUR
 P-SW13 | DASHBOARD (data/index.html)  [GEÄNDERT]
   Technologie: Reines HTML5/CSS3/JavaScript, keine externen Libraries.
   Tabs: Live | Verlauf | System | Einstellungen
-  Kopf: Verbindungsstatus, Echtzeit-Uhr in MEZ, SD-Status,
-        Puffergröße, Laufzeit.
+  Kopf: Verbindungsstatus, Echtzeit-Uhr (lokale Zeitzone, DST), SD-Status,
+        Puffergröße, Laufzeit. Footer zeigt aktive TZ-Abkürzung (z. B. CEST).
   Live-Tab:
     - SoC als SVG-Bogen mit Farbwechsel (grün/orange/rot)
     - BMS-Karte (V/I/P, Temperaturen, SoC, Kapazität, MOSFET-Status)
     - MPPT-Karte (PV-Leistung, Ladezustand, Tagesertrag, Max heute)
     - Live-Graph: 6 Metriken (SoC, Spannung, Strom, PV-Leistung,
       PV-Spannung, Rest-Ah), 5 Zeitfenster (30m/2h/6h/24h/48h),
-      HH:MM-Achse in MEZ, Gradient-Fill
+      HH:MM-Achse in lokaler Zeitzone, Gradient-Fill
   Verlauf-Tab:
     - SD-Dateiliste via /api/sdfiles
     - History-Graph aus /api/sddata (bis 2.000 Punkte)
@@ -508,6 +520,8 @@ P-SW13 | DASHBOARD (data/index.html)  [GEÄNDERT]
   Einstellungen-Tab:
     - Formular für alle 12 NVS-Parameter
     - Speichern → POST /api/params, Fabrik-Reset → POST /api/reset
+    - Zeitzonen-Auswahl (Dropdown gängiger EU-Zonen + benutzerdef.
+      POSIX-String) → GET/POST /api/tz, zeigt aktive Abkürzung+Offset
   Zeit-Sync: POST /api/time bei Connect und alle 5 min.
 
 P-SW14 | VARIABLE PARAMETER (NVS, Namespace "womo_cfg")  [GEÄNDERT]
@@ -714,8 +728,12 @@ P-SW18 | RGB-LED RUNDLAUF-ENCODING (io.h/.cpp, logic.cpp)  [NEU v5.1]
     pvWRThresholdOn/Off entfernt. [P-SW14]
 
   ZEITBASIS:
-  • L-SW19: Zeitzone MEZ (UTC+1) festgelegt, keine Sommerzeit.
-    Zeitstempel intern UTC, Anzeige+Dateinamen in MEZ.
+  • L-SW19: Zeitzone als wählbarer POSIX-TZ-String mit automatischer
+    Sommerzeit (DST), Default Europe/Berlin (MEZ/MESZ). Vorher feste
+    MEZ (UTC+1) ohne DST. Storage/Rechnung intern UTC; Anzeige + lokale
+    CSV-Spalte über localtime_r umgerechnet. SD-Dateinamen jetzt nach
+    UTC-Tag (vorher MEZ-Tag). Neu: GET/POST /api/tz, NVS "clock"/"tz".
+    config.h: CLOCK_MEZ_OFFSET_SEC entfernt → DEFAULT_TZ.
     Uhr-Zurückdrehen durch Browser erlaubt (kein Monotonizitätsschutz).
 
   HARDWARE/GPIO:
@@ -747,7 +765,8 @@ ERSTELLTE QUELLDATEIEN (Stand v5.1)
                                BMS_USE_CAN für CAN-Build, siehe P-SW17)
   ✓ partitions_16mb.csv       (kein OTA, unverändert)
   ✓ src/config.h              (v5.1: GPIO 1/2 jetzt produktiv (DS3231),
-                               RGB-Rundlauf-Konstanten)
+                               RGB-Rundlauf-Konstanten, DEFAULT_TZ statt
+                               CLOCK_MEZ_OFFSET_SEC)
   ✓ src/params.h   ✓ src/params.cpp   (GEÄNDERT v5.0: 12 Parameter,
                                socGelOff entfernt, *High neu, pvWR entfernt)
   ✓ src/bms.h      ✓ src/bms.cpp      (GEÄNDERT v5.0: reduziertes JSON)
@@ -760,14 +779,17 @@ ERSTELLTE QUELLDATEIEN (Stand v5.1)
                                Encoding statt Prioritäts-Enum, siehe P-SW18)
   ✓ src/logic.h    ✓ src/logic.cpp    (GEÄNDERT v5.1: setzt
                                g_rgbChannelMask statt g_rgbState)
-  ✓ src/logger.h   ✓ src/logger.cpp   (unverändert ggü. v4.3; SD-SPI-
-                               Hinweis ESP32-S3 siehe P-SW11)
+  ✓ src/logger.h   ✓ src/logger.cpp   (GEÄNDERT v5.1: SD-Dateiname nach
+                               UTC-Tag; SD-SPI-Hinweis ESP32-S3 siehe P-SW11)
   ✓ src/clock.h    ✓ src/clock.cpp    (GEÄNDERT v5.1: DS3231 produktiv,
-                               führende Zeitquelle statt Browser-Sync)
+                               führende Zeitquelle; wählbarer POSIX-TZ +
+                               DST via localtime_r, /api/tz, NVS "clock"/"tz")
   ✓ src/watchdog.h ✓ src/watchdog.cpp (unverändert)
-  ✓ src/http_server.h ✓ src/http_server.cpp  (GEÄNDERT v5.0: 12 Parameter;
-                               Routenreihenfolge-Hinweis siehe P-SW12)
+  ✓ src/http_server.h ✓ src/http_server.cpp  (GEÄNDERT v5.1: /api/tz
+                               (GET/POST), tz-Abk. im Live-JSON, ts_mez
+                               DST-korrekt; Routenreihenfolge siehe P-SW12)
   ✓ src/main.cpp              (unverändert)
-  ✓ data/index.html           (GEÄNDERT v5.0: Dashboard ohne Zellspannungen,
-                               Alarm-Box, Schutzparameter; 6 Metriken; MEZ)
+  ✓ data/index.html           (GEÄNDERT v5.1: Zeitzonen-Auswahl im
+                               Einstellungen-Tab, dynamisches MEZ/MESZ-Label;
+                               Dashboard ohne Zellspannungen, 6 Metriken)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

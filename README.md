@@ -119,4 +119,17 @@ Details und vollständiger Änderungsverlauf: [`Software_Lasten_Pflichtenheft.tx
 
 ## Lizenz
 
-Privates Projekt, keine Lizenz für die Weiterverwendung vergeben. Alle Rechte beim Autor.
+Der Quellcode in diesem Repository ist urheberrechtlich geschützt. Das Repository ist auf GitHub öffentlich einsehbar, **es wird jedoch keine Lizenz zur Weiterverwendung vergeben** — alle Rechte verbleiben beim Autor. Ansehen, Klonen und Forken über GitHub ist möglich; eine Weiterverbreitung, Veränderung oder (kommerzielle) Nutzung des eigenen Codes über die GitHub-Standardrechte hinaus ist ohne ausdrückliche Zustimmung des Autors nicht gestattet.
+
+### Drittanbieter-Bibliotheken
+
+Die Firmware nutzt folgende Open-Source-Bibliotheken (unverändert, dynamisch über PlatformIO `lib_deps` eingebunden, nicht Teil dieses Repos):
+
+| Bibliothek | Lizenz | Quelle |
+|---|---|---|
+| ESPAsyncWebServer (ESP32Async-Fork) | LGPL-3.0 | github.com/ESP32Async/ESPAsyncWebServer |
+| AsyncTCP (ESP32Async-Fork) | LGPL-3.0 | github.com/ESP32Async/AsyncTCP |
+| ArduinoJson | MIT | github.com/bblanchon/ArduinoJson |
+| FS / SD / LittleFS | LGPL-2.1 (Teil von arduino-esp32) | github.com/espressif/arduino-esp32 |
+
+Es gelten jeweils die Originallizenzen der Bibliotheken; sie werden hier nur referenziert, nicht im Repo mitgeliefert oder verändert.

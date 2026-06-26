@@ -96,8 +96,9 @@ static void finalize_minute_locked() {
 // ── SD-Schreiben (immer unter g_sdMutex aufrufen!) ────────────
 static void write_row_to_sd(const LogEntry& e) {
     char fname[24];
-    // Dateiname in MEZ (UTC+CLOCK_MEZ_OFFSET_SEC), Timestamp bleibt UTC intern
-    uint32_t days = (e.timestamp + CLOCK_MEZ_OFFSET_SEC) / 86400;
+    // Dateiname nach UTC-Tag (Storage rein UTC, DST-unabhängig stabil).
+    // ts-Spalte im CSV ist ebenfalls UTC; lokale Zeit nur in der Anzeige.
+    uint32_t days = e.timestamp / 86400;
     snprintf(fname, sizeof(fname), "/log_%05lu.csv", (unsigned long)days);
     bool new_file = !SD.exists(fname);
     File f = SD.open(fname, FILE_APPEND);

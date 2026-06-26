@@ -20,10 +20,16 @@
 // ============================================================
 
 // ── Zeitzone ─────────────────────────────────────────────────
-// System läuft immer in MEZ (UTC+1), keine Sommerzeit.
-// Timestamps intern als UTC-Epoch; Anzeige und Dateinamen
-// werden um diesen Offset verschoben.
-#define CLOCK_MEZ_OFFSET_SEC        3600        // UTC+1
+// Intern/Storage IMMER UTC-Epoch (DS3231, Ringpuffer, CSV-ts-Spalte,
+// SD-Dateinamen). Der lokale Offset gilt nur für Anzeige und die
+// lokale CSV-Spalte und kommt aus newlib localtime_r — gesteuert über
+// einen vollwertigen POSIX-TZ-String (Sommerzeit/DST automatisch).
+// Zur Laufzeit über /api/tz änderbar, persistiert in NVS "clock"/"tz".
+// Format: STDoffset[DST[,start[/time],end[/time]]]
+//   Europe/Berlin : "CET-1CEST,M3.5.0,M10.5.0/3"
+//   Europe/London : "GMT0BST,M3.5.0/1,M10.5.0"
+//   Europe/Athens : "EET-2EEST,M3.5.0/3,M10.5.0/4"
+#define DEFAULT_TZ                  "CET-1CEST,M3.5.0,M10.5.0/3"   // Europe/Berlin
 
 // ── Serielle Schnittstellen ──────────────────────────────────
 
@@ -89,7 +95,8 @@
 #define RGB_SOC_GAUGE_MID_PCT       40          // < diesem SoC → SoC-Slot gelb, sonst grün
 
 // ── WLAN ─────────────────────────────────────────────────────
-#include "secrets.h"
+#define WIFI_AP_SSID                "GODMODULE"
+#define WIFI_AP_PASSWORD            "BM-hy678"
 #define WIFI_AP_CHANNEL             6
 #define WIFI_AP_MAX_CLIENTS         3
 
@@ -100,7 +107,7 @@
 #define LOG_BUFFER_SIZE             86400       // 48h @ 2s = 86400 Einträge
 
 // ── SD-Karte ─────────────────────────────────────────────────
-#define LOG_FILE_PREFIX             "/"         // /log_NNNNN.csv (NNNNN = Tage MEZ)
+#define LOG_FILE_PREFIX             "/"         // /log_NNNNN.csv (NNNNN = Tage UTC)
 
 // ── Watchdog ─────────────────────────────────────────────────
 #define WDT_TIMEOUT_MS              4000

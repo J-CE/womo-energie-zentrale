@@ -33,8 +33,8 @@ Y_out = 170;     // Außenmaß Box, lange Achse
 margin = (X_out-board_X)/2; // = 5mm, ergibt sich aus den Vorgaben (zentriert)
 
 /* [Platinenhalter] */
-standoff_spacing_X = 91;   // 151x91 Lochabstand
-standoff_spacing_Y = 151;
+standoff_spacing_X = 91.5;   // 151x91 Lochabstand
+standoff_spacing_Y = 152;
 standoff_h   = 8;          // Höhe der Platinenhalter
 standoff_d   = 7;
 screw_pilot_d= 2.6;        // M3 selbstschneidend
@@ -46,20 +46,20 @@ floor_t  = 2.6;
 lid_top_t= 2.6;
 lid_skirt= 8;
 fit_gap  = 0.25;
-internal_H = 60;           // Gesamtinnenhöhe Boden -> Deckel-Unterseite (FEST)
+internal_H = 55;           // Gesamtinnenhöhe Boden -> Deckel-Unterseite (FEST)
 base_wall_h = floor_t + internal_H; // Außenhöhe der Wanne
 
 /* [Kabeldurchlässe] – Unterkante ab 11mm über Boden (= floor_t+11 absolut)
    X/Y weiterhin Schätzungen anhand Skizze, Board-lokal (x:0..100, y:0..160) */
-cut_z0 = floor_t + 12;
+cut_z0 = floor_t + 10;
 
 top_slot_x = 2;   top_slot_w = 43;  top_slot_h = 16;             // Eingang/Stromkabel (Wand OBEN)
 
 left_mppt_y0 = 10;  left_mppt_y1 = 28;  left_mppt_d = 12;        // MPPT VE.Direct (Wand LINKS)
 left_main_y0 = 72;  left_main_y1 = 124; left_main_h = 30;        // Gel-Lader + RS485 + VOUT li.
 
-right_ant_y0 = 10;  right_ant_y1 = 28;  right_ant_d = 11;        // Antenne/Sensorkabel (Wand RECHTS)
-right_usb_y0 = 40;  right_usb_y1 = 58;  right_usb_d = 11;        // USB-C Programmierkabel
+right_ant_y0 = 15;  right_ant_y1 = 28;  right_ant_d = 15;        // Antenne/Sensorkabel (Wand RECHTS)
+right_usb_y0 = 44;  right_usb_y1 = 58;  right_usb_d = 11;        // USB-C Programmierkabel
 right_main_y0= 72;  right_main_y1= 124; right_main_h = 30;       // D+ + VOUT re.
 
 bottom_slot_x = 15; bottom_slot_w = 70; bottom_slot_h = 10;      // Landstrom + Klemmen (Wand UNTEN)
