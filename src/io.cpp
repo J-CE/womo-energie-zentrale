@@ -4,7 +4,8 @@
 //
 //  Alle Ausgänge werden in io_init() explizit LOW gesetzt
 //  (Fail-Safe: kein Ausgang aktiv bei Reset/Boot).
-//  io_read_landstrom(): INPUT_PULLUP, LOW = Landstrom aktiv.
+//  io_read_landstrom(): INPUT (Spannungsteiler 2k/1,5k von 5V),
+//                       HIGH = Landstrom aktiv.
 // ============================================================
 #include "io.h"
 #include "config.h"
@@ -18,7 +19,9 @@ volatile bool         g_rgbHeapAlert    = false;
 
 void io_init() {
     // Eingänge
-    pinMode(GPIO_LANDSTROM_SENSOR, INPUT_PULLUP);
+    // Landstrom: externer Spannungsteiler 2k/1,5k von 5V liefert ~2,1V (HIGH)
+    // bei Landstrom, sonst 0V (LOW). KEIN Pull-up — würde den Teiler verfälschen.
+    pinMode(GPIO_LANDSTROM_SENSOR, INPUT);
 
     // Ausgänge — zuerst sicheren Zustand setzen, dann pinMode
     // D+ Relais: Active-LOW → HIGH = sicher (Relais abgefallen)
@@ -47,10 +50,10 @@ void io_init() {
 }
 
 bool io_read_landstrom() {
-    // Optokoppler mit Pull-Up: LOW wenn Landstrom (Optokoppler leitet)
-    // HIGH wenn kein Landstrom (Pull-Up zieht HIGH)
-    // → invertieren für logisch "Landstrom = true"
-    g_io.landstrom = (digitalRead(GPIO_LANDSTROM_SENSOR) == LOW);
+    // Spannungsteiler 2k/1,5k von 5V-Signal:
+    // Landstrom vorhanden → ~2,1V am Pin → HIGH
+    // kein Landstrom      → 0V (über 1,5k nach GND) → LOW
+    g_io.landstrom = (digitalRead(GPIO_LANDSTROM_SENSOR) == HIGH);
     return g_io.landstrom;
 }
 

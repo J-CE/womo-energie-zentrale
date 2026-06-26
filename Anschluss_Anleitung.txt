@@ -95,12 +95,16 @@ Masse: MPPT-GND → Sternpunkt.
 Parameter: 19200 Baud, 8N1. VictronConnect TX-Modus "VE.Direct".
 
 ──────────────────────────────────────────────────────────────────
-MODUL 4 — Landstrom-Sensor (PC817-Optokoppler)  [EINGANG]
+MODUL 4 — Landstrom-Sensor (Spannungsteiler 2k/1,5k)  [EINGANG]
 ──────────────────────────────────────────────────────────────────
-Baustein: PC817-Modul (Schraubklemme INPUT, Header OUT/GND).
-  INPUT + → + HDR-15-5   |   INPUT − → GND HDR-15-5
-  OUT → GPIO 18 (INPUT_PULLUP)   |   GND → Sternpunkt
-Erstbetrieb prüfen: bedeutet HIGH wirklich "Landstrom vorhanden"?
+Signalgeber: 5V-Netzteil (an Landstrom/230V gekoppelt → 5V bei Netz).
+Spannungsteiler bringt 5V auf ESP-tauglichen Pegel:
+  5V-Signal ─[ 2,0 kΩ ]─┬─ GPIO 18 (INPUT, KEIN Pull-up)
+                        └─[ 1,5 kΩ ]─ GND (Sternpunkt)
+  → Landstrom an: ~2,1V am Pin = HIGH
+  → Landstrom aus: 0V (über 1,5k nach GND) = LOW
+WICHTIG: pinMode INPUT (nicht INPUT_PULLUP) — interner Pull-up läge
+  parallel zum 1,5k und verschöbe den Teiler. HIGH = Landstrom.
 
 ──────────────────────────────────────────────────────────────────
 MODUL 5 — SD-Karte (SPI)
@@ -173,8 +177,8 @@ MODUL 8 — Wechselrichter-Remote (Optokoppler-Ausgang) [Active-HIGH]
 Ansteuerung: GPIO 40, ACTIVE-HIGH. Potenzialfreier Schaltkontakt.
   ESP-Seite:  GPIO 40 ─[ ~330Ω ]─ PC817 Anode | PC817 Kathode → GND
   WR-Seite:   PC817 Kollektor → WR-Remote (+) | Emitter → WR-Remote-GND
-HINWEIS: erfordert einen ZWEITEN Optokoppler (Modul-4-PC817 ist als
-  Landstrom-Eingang belegt). Bare PC817 + 330Ω genügt.
+HINWEIS: eigener PC817 nur für diesen Ausgang (Modul 4 ist jetzt ein
+  Spannungsteiler, kein Optokoppler mehr). Bare PC817 + 330Ω genügt.
 
 ──────────────────────────────────────────────────────────────────
 MODUL 9 — Status-LED (einfache LED)  [Active-HIGH]
@@ -213,7 +217,7 @@ GPIO-GESAMTTABELLE
   GPIO 15   FREI       (RS485 Auto-DE/RE — nicht belegt)
   GPIO 16   UART1 RX   JK-BMS (von MAX485 RO)
   GPIO 17   UART1 TX   JK-BMS (zu MAX485 DI)
-  GPIO 18   INPUT      Landstrom-Sensor (PULLUP)
+  GPIO 18   INPUT      Landstrom-Sensor (Teiler 2k/1,5k, HIGH=Netz)
   GPIO 21   OUTPUT     D+ COM-MOSFET Kühlschrank   [Active-HIGH] *geändert
   GPIO 38   UART2 RX   VE.Direct MPPT (Teiler 1k/2k)
   GPIO 39   OUTPUT     Gel-Lader COM-MOSFET        [Active-HIGH]

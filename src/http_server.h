@@ -11,6 +11,8 @@
 //    GET  /api/buffer    PSRAM-Ringpuffer (bis 2000 Einträge)
 //    GET  /api/sdfiles   SD-Dateiliste
 //    GET  /api/sddata    SD-CSV-Streaming
+//    GET  /api/wifi      Heim-WLAN-Status (SSID/verbunden/IP/RSSI, ohne PW)
+//    POST /api/wifi      Heim-WLAN setzen (ssid/pass → NVS, sofort aktiv)
 //    WS   /ws            Push alle 2s
 // ============================================================
 #pragma once

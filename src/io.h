@@ -8,7 +8,7 @@
 //    GPIO_OPTO_WR_REMOTE 40  Active-HIGH  WR-Remote Optokoppler
 //    GPIO_STATUS_LED     41  Active-HIGH  Status-LED
 //  Eingänge:
-//    GPIO_LANDSTROM_SENSOR 18 INPUT_PULLUP HIGH=Landstrom
+//    GPIO_LANDSTROM_SENSOR 18 INPUT (Teiler 2k/1,5k von 5V) HIGH=Landstrom
 // ============================================================
 #pragma once
 #include <Arduino.h>

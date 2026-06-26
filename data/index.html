@@ -345,6 +345,25 @@
         </div>
       </div>
     </div>
+
+    <div class="card wide netz">
+      <div class="ch"><h2>Heim-WLAN</h2><span class="badge">STA · bucht sich vor der Haustür ein</span></div>
+      <div class="params">
+        <div class="field"><label>Status</label>
+          <div class="hint">AP läuft immer. Bei Heimnetz-Verbindung wandert der AP auf dessen Kanal.</div>
+          <div class="ip"><span class="curval" id="wifiNow">–</span></div></div>
+        <div class="field"><label>Heimnetz-SSID</label>
+          <div class="hint">Leer lassen und speichern = STA aus, reiner AP-Betrieb.</div>
+          <div class="ip"><input type="text" id="wifiSsid" placeholder="MeinHeimnetz" maxlength="32" spellcheck="false" autocomplete="off"></div></div>
+        <div class="field"><label>Passwort</label>
+          <div class="hint">Leer lassen = vorhandenes Passwort behalten. Min. 8 Zeichen (WPA).</div>
+          <div class="ip"><input type="password" id="wifiPass" placeholder="••••••••" maxlength="63" spellcheck="false" autocomplete="off"></div></div>
+        <div class="actions">
+          <button type="button" class="btn primary" id="wifiSaveBtn">WLAN speichern</button>
+          <button type="button" class="btn ghost" id="wifiRevertBtn">Verwerfen</button>
+        </div>
+      </div>
+    </div>
   </section>
 </main>
 
@@ -365,7 +384,7 @@ document.querySelectorAll("nav.tabs button").forEach(b=>{b.onclick=()=>{
   b.classList.add("active");$(b.dataset.view).classList.add("active");
   if(b.dataset.view==="live")loadLive();
   if(b.dataset.view==="hist")loadSdFiles();
-  if(b.dataset.view==="cfg"){if(!paramsLoaded)loadParams();loadTz();}
+  if(b.dataset.view==="cfg"){if(!paramsLoaded)loadParams();loadTz();loadWifi();}
 };});
 
 let toastT;function toast(m,k=""){const t=$("toast");t.textContent=m;t.className="show "+k;clearTimeout(toastT);toastT=setTimeout(()=>t.className=t.className.replace("show",""),2600);}
@@ -455,6 +474,12 @@ function render(D){
   } else $("sHeap").textContent="–";
   $("sPsram").textContent=sys.psram!=null?`${(sys.psram/1024/1024).toFixed(2)} MB`:"–";
   const inv=D.inv||{};$("sInv").textContent=inv.note||"Stub";
+  const net=D.net;const wn=$("wifiNow");
+  if(net&&wn){
+    wn.textContent = !net.sta_en ? "STA aus · reiner AP-Betrieb"
+      : net.sta ? `verbunden · ${net.ip||"?"} · ${net.rssi||0} dBm`
+      : "gesucht · nicht in Reichweite";
+  }
 }
 function setSw(id,on){$(id).classList.toggle("on",!!on);}
 function db(v){if(v==null)return"";if(v>0)return`+${v}▲`;if(v<0)return`${v}▼`;return"·";}
@@ -620,6 +645,36 @@ $("tzSaveBtn").onclick=async()=>{
     const res=await r.json();
     if(r.ok&&res.ok){toast("Zeitzone gespeichert","ok");loadTz();}else toast(res.error||"Fehler","bad");
   }catch(_){toast("Speichern fehlgeschlagen","bad");}finally{$("tzSaveBtn").disabled=false;}
+};
+
+/* ---- Heim-WLAN (STA) ---- */
+function wifiStatusText(w){
+  if(!w||!w.set) return "STA aus · reiner AP-Betrieb";
+  if(w.connected) return `verbunden · ${w.ip||"?"} · ${w.rssi||0} dBm`;
+  return `gesucht: ${w.ssid||"?"} · nicht in Reichweite`;
+}
+async function loadWifi(){
+  try{const r=await fetch("/api/wifi",{cache:"no-store"});const w=await r.json();
+    $("wifiSsid").value=w.ssid||"";
+    $("wifiPass").value="";
+    $("wifiNow").textContent=wifiStatusText(w);
+  }catch(_){$("wifiNow").textContent="–";}
+}
+$("wifiRevertBtn").onclick=loadWifi;
+$("wifiSaveBtn").onclick=async()=>{
+  const ssid=$("wifiSsid").value.trim();
+  const pass=$("wifiPass").value;        // nicht trimmen: Leerzeichen können gültig sein
+  if(ssid.length>32){toast("SSID > 32 Zeichen","bad");return;}
+  if(ssid.length&&pass.length&&pass.length<8){toast("WPA-Passwort < 8 Zeichen","bad");return;}
+  const body={ssid};
+  if(pass.length) body.pass=pass;        // leeres PW → Server behält altes
+  if(!ssid.length) body.pass="";         // SSID gelöscht → PW mitlöschen
+  $("wifiSaveBtn").disabled=true;
+  try{const r=await fetch("/api/wifi",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const res=await r.json();
+    if(r.ok&&res.ok){toast(ssid.length?"WLAN gespeichert — verbinde …":"STA deaktiviert","ok");setTimeout(loadWifi,1500);}
+    else toast(res.error||"Fehler","bad");
+  }catch(_){toast("Speichern fehlgeschlagen","bad");}finally{$("wifiSaveBtn").disabled=false;}
 };
 
 /* Start */

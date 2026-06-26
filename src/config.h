@@ -69,7 +69,7 @@
 #define I2C_RTC_SCL                 2
 
 // ── Digitale Eingänge ────────────────────────────────────────
-#define GPIO_LANDSTROM_SENSOR       18          // INPUT_PULLUP, HIGH = Landstrom
+#define GPIO_LANDSTROM_SENSOR       18          // INPUT, Spannungsteiler 2k/1,5k von 5V, HIGH = Landstrom
 
 // ── Digitale Ausgänge ────────────────────────────────────────
 #define GPIO_RELAY_D_PLUS           21          // Active-LOW
@@ -99,6 +99,15 @@
 #define WIFI_AP_PASSWORD            "BM-hy678"
 #define WIFI_AP_CHANNEL             6
 #define WIFI_AP_MAX_CLIENTS         3
+
+// Heim-WLAN (STA): WoMo bucht sich vor der Haustür ins Heimnetz ein.
+// Konfiguration zur Laufzeit per Dashboard → NVS ("wifi"-Namespace).
+// Diese Defaults greifen nur beim allerersten Boot / leerem NVS.
+// Leere SSID = reiner AP-Betrieb, STA wird nicht gestartet.
+// APSTA teilt EIN Radio: bei STA-Verbindung wandert der AP zwingend
+// auf den Router-Kanal (WIFI_AP_CHANNEL gilt nur ohne STA-Verbindung).
+#define DEFAULT_WIFI_STA_SSID       ""
+#define DEFAULT_WIFI_STA_PASSWORD   ""
 
 // ── Webserver ────────────────────────────────────────────────
 #define WEBSERVER_PORT              80          // WS auf /ws, gleichem Port

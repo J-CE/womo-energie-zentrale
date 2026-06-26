@@ -21,9 +21,52 @@
 #include <ArduinoJson.h>
 #include <LittleFS.h>
 #include <SD.h>
+#include <Preferences.h>
 
 static AsyncWebServer server(WEBSERVER_PORT);
 static AsyncWebSocket ws("/ws");
+
+// ── Heim-WLAN (STA) ───────────────────────────────────────────
+// Credentials liegen im NVS-Namespace "wifi" (getrennt von clock/params).
+// Passwort wird per /api/wifi NIE zurückgegeben.
+static Preferences  wprefs;
+static bool         s_staEnabled = false;   // SSID konfiguriert?
+// POST setzt nur dieses Flag; die eigentliche WiFi-Rekonfiguration läuft
+// im ws_task-Kontext (webserver_broadcast), NICHT im AsyncTCP-Handler.
+static volatile bool s_wifiReapply = false;
+
+static void on_wifi_event(WiFiEvent_t event) {
+    switch (event) {
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+            Serial.printf("[WEB] STA verbunden: %s  (RSSI %d dBm, Kanal %d)\n",
+                          WiFi.localIP().toString().c_str(),
+                          WiFi.RSSI(), WiFi.channel());
+            break;
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+            // Normalfall, wenn das WoMo nicht zu Hause steht — AP läuft weiter.
+            Serial.println("[WEB] STA getrennt — AP weiter aktiv, Reconnect aktiv");
+            break;
+        default: break;
+    }
+}
+
+// Liest SSID/PW aus NVS und startet (oder beendet) den STA-Teil.
+// Non-blocking: WiFi.begin() blockiert den Boot/Webserver nicht.
+static void wifi_apply_sta() {
+    String ssid = wprefs.getString("ssid", DEFAULT_WIFI_STA_SSID);
+    String pass = wprefs.getString("pass", DEFAULT_WIFI_STA_PASSWORD);
+
+    s_staEnabled = (ssid.length() > 0);
+    if (s_staEnabled) {
+        WiFi.setAutoReconnect(true);
+        WiFi.begin(ssid.c_str(), pass.c_str());   // non-blocking
+        Serial.printf("[WEB] STA: suche \"%s\" ...\n", ssid.c_str());
+    } else {
+        // SSID leer → STA abschalten, AP bleibt bestehen (eraseap=true).
+        WiFi.disconnect(false, true);
+        Serial.println("[WEB] STA deaktiviert (keine SSID konfiguriert)");
+    }
+}
 
 static void on_ws_event(AsyncWebSocket* s, AsyncWebSocketClient* c,
                         AwsEventType type, void*, uint8_t*, size_t) {
@@ -50,6 +93,11 @@ static String build_live_json() {
     j += "\"sys\":{\"heap\":"     + String(ESP.getFreeHeap())
        + ",\"min_heap\":"         + String(ESP.getMinFreeHeap())
        + ",\"psram\":"            + String(ESP.getFreePsram()) + "},";
+    bool staUp = WiFi.isConnected();
+    j += "\"net\":{\"sta_en\":"   + String(s_staEnabled?"true":"false")
+       + ",\"sta\":"              + String(staUp?"true":"false")
+       + ",\"ip\":\""             + (staUp?WiFi.localIP().toString():String(""))
+       + "\",\"rssi\":"           + String(staUp?WiFi.RSSI():0) + "},";
     j += "\"rtc\":"   + clock_rtc_json() + ",";     
     j += "\"sd\":"    + String(logger_sd_available()?"true":"false") + ",";
     j += "\"buf\":"   + String(g_log_count);
@@ -166,6 +214,59 @@ static void handle_tz_post(AsyncWebServerRequest* req, uint8_t* data,
     free(body);
     req->send(ok?200:400, "application/json",
               ok?"{\"ok\":true}":"{\"error\":\"TZ ungültig (2..63 Zeichen)\"}");
+}
+
+// ── Heim-WLAN-Status / -Konfiguration ─────────────────────────
+static void handle_wifi_get(AsyncWebServerRequest* req) {
+    bool staUp = WiFi.isConnected();
+    String ssid = wprefs.getString("ssid", DEFAULT_WIFI_STA_SSID);
+    char buf[200];
+    // Passwort wird bewusst NICHT ausgeliefert; "set" zeigt nur, ob hinterlegt.
+    snprintf(buf, sizeof(buf),
+        "{\"ssid\":\"%s\",\"set\":%s,\"connected\":%s,\"ip\":\"%s\",\"rssi\":%d}",
+        ssid.c_str(),
+        ssid.length() ? "true" : "false",
+        staUp ? "true" : "false",
+        staUp ? WiFi.localIP().toString().c_str() : "",
+        staUp ? WiFi.RSSI() : 0);
+    req->send(200, "application/json", buf);
+}
+
+static void handle_wifi_post(AsyncWebServerRequest* req, uint8_t* data,
+                             size_t len, size_t index, size_t total) {
+    char* body = collect_body_chunk(req, data, len, index, total);
+    if (!body) return;
+    StaticJsonDocument<256> doc;
+    if (deserializeJson(doc, body)) {
+        free(body);
+        req->send(400, "application/json", "{\"error\":\"JSON ungültig\"}");
+        return;
+    }
+    String ssid = String((const char*)(doc["ssid"] | ""));
+    // Leeres/fehlendes "pass" = vorhandenes Passwort beibehalten.
+    // Explizit löschen über {"ssid":"","pass":""}.
+    bool hasPass = doc.containsKey("pass");
+    String pass = String((const char*)(doc["pass"] | ""));
+    free(body);
+
+    if (ssid.length() > 32) {
+        req->send(400, "application/json", "{\"error\":\"SSID > 32 Zeichen\"}");
+        return;
+    }
+    if (hasPass && pass.length() > 0 && pass.length() < 8) {
+        req->send(400, "application/json", "{\"error\":\"WPA-Passwort < 8 Zeichen\"}");
+        return;
+    }
+
+    wprefs.putString("ssid", ssid);
+    if (ssid.length() == 0)  wprefs.putString("pass", "");      // SSID gelöscht → PW auch
+    else if (hasPass)        wprefs.putString("pass", pass);    // nur bei mitgesendetem PW
+
+    Serial.printf("[WEB] STA-Config geändert: SSID=\"%s\"\n", ssid.c_str());
+    // Keine WiFi-Calls hier (AsyncTCP-Task) — nur Flag setzen. Die
+    // Rekonfiguration erfolgt im ws_task, nachdem dieser Response geflusht ist.
+    s_wifiReapply = true;
+    req->send(200, "application/json", "{\"ok\":true}");
 }
 
 static void handle_buffer(AsyncWebServerRequest* req) {
@@ -299,8 +400,12 @@ void webserver_init() {
     if (!LittleFS.begin(true)) Serial.println("[WEB] LittleFS FEHLER!");
     else                        Serial.println("[WEB] LittleFS OK");
 
+    wprefs.begin("wifi", false);
+    WiFi.onEvent(on_wifi_event);
+    WiFi.mode(WIFI_AP_STA);          // AP dauerhaft + optional STA (Heimnetz)
     WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD, WIFI_AP_CHANNEL, 0, WIFI_AP_MAX_CLIENTS);
     Serial.printf("[WEB] AP: %s  IP: %s\n", WIFI_AP_SSID, WiFi.softAPIP().toString().c_str());
+    wifi_apply_sta();                // STA aus NVS starten (falls SSID gesetzt)
 
     ws.onEvent(on_ws_event);
     server.addHandler(&ws);
@@ -318,6 +423,9 @@ void webserver_init() {
     server.on("/api/tz",      HTTP_GET,  handle_tz_get);
     server.on("/api/tz", HTTP_POST,
         [](AsyncWebServerRequest* r){}, nullptr, handle_tz_post);
+    server.on("/api/wifi",    HTTP_GET,  handle_wifi_get);
+    server.on("/api/wifi", HTTP_POST,
+        [](AsyncWebServerRequest* r){}, nullptr, handle_wifi_post);
 
     // Statischer Catch-all ZULETZT — sonst fängt er /api/* ab
     server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
@@ -328,6 +436,15 @@ void webserver_init() {
 }
 
 void webserver_broadcast() {
+    // Deferred-Apply: WiFi-Rekonfiguration im ws_task-Kontext (Core 0),
+    // ausgelöst per /api/wifi-POST. Bewusst VOR dem ws.count()-Return,
+    // damit es auch ohne verbundenen WebSocket-Client greift.
+    if (s_wifiReapply) {
+        s_wifiReapply = false;
+        WiFi.disconnect(false, true);     // alte STA-Config verwerfen, AP bleibt
+        wifi_apply_sta();                 // neue Credentials anwenden (non-blocking)
+    }
+
     if (ws.count() == 0) return;
     String json = build_live_json();
     AsyncWebSocketMessageBuffer* buf = ws.makeBuffer(json.length());
