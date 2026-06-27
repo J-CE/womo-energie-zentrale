@@ -154,6 +154,7 @@
     <button data-view="live" class="active">Live</button>
     <button data-view="hist">Verlauf</button>
     <button data-view="sys">System</button>
+    <button data-view="lage">Lage</button>
     <button data-view="cfg">Einstellungen</button>
   </nav>
 </header>
@@ -283,6 +284,85 @@
   </section>
 
   <!-- ============ EINSTELLUNGEN ============ -->
+  <!-- ============ LAGE (Wasserwaage) ============ -->
+  <section id="lage" class="view">
+    <div class="grid">
+      <div class="card">
+        <div class="ch"><h2>Libelle <span class="accent">·</span> Neigung</h2><span class="badge" id="lvBadge">–</span></div>
+        <svg viewBox="0 0 200 200" style="width:100%;max-width:300px;display:block;margin:6px auto">
+          <circle cx="100" cy="100" r="90" fill="none" stroke="var(--line2)" stroke-width="1.5"/>
+          <circle cx="100" cy="100" r="60" fill="none" stroke="var(--line)" stroke-width="1"/>
+          <line x1="100" y1="6" x2="100" y2="194" stroke="var(--line)" stroke-width="1"/>
+          <line x1="6" y1="100" x2="194" y2="100" stroke="var(--line)" stroke-width="1"/>
+          <circle id="lvRing" cx="100" cy="100" r="16" fill="none" stroke="var(--faint)" stroke-width="2"/>
+          <circle id="lvBubble" cx="100" cy="100" r="13" fill="var(--akku)" opacity="0.9"/>
+        </svg>
+        <div class="kv" style="margin-top:8px">
+          <span class="k">Roll (quer)</span><span class="v" id="lvRoll">–</span>
+          <span class="k">Pitch (längs)</span><span class="v" id="lvPitch">–</span>
+          <span class="k">Zustand</span><span class="v" id="lvState">–</span>
+        </div>
+        <div class="actions" style="margin-top:12px">
+          <button type="button" class="btn primary" id="lvCalibBtn">Eben — jetzt kalibrieren</button>
+          <button type="button" class="btn ghost" id="lvResetBtn">Null zurücksetzen</button>
+        </div>
+        <p style="color:var(--faint);font-size:11.5px;margin:10px 0 0" id="lvHint">
+          Fahrzeug nachweislich waagerecht stellen, dann „kalibrieren". Speichert den Null-Offset des Sensors.
+        </p>
+      </div>
+
+      <div class="card">
+        <div class="ch"><h2>Keile <span class="accent">·</span> je Rad</h2><span class="badge">Front oben</span></div>
+        <svg viewBox="0 0 220 300" style="width:100%;max-width:240px;display:block;margin:0 auto">
+          <text x="110" y="14" text-anchor="middle" fill="var(--faint)" font-size="12" font-family="var(--sans)">▲ FRONT</text>
+          <rect x="55" y="26" width="110" height="248" rx="16" fill="var(--panel2)" stroke="var(--line2)" stroke-width="1.5"/>
+          <!-- Räder: 0=VL 1=VR 2=HL 3=HR -->
+          <rect id="lvW0" x="30"  y="56"  width="26" height="46" rx="6" fill="var(--faint)"/>
+          <rect id="lvW1" x="164" y="56"  width="26" height="46" rx="6" fill="var(--faint)"/>
+          <rect id="lvW2" x="30"  y="198" width="26" height="46" rx="6" fill="var(--faint)"/>
+          <rect id="lvW3" x="164" y="198" width="26" height="46" rx="6" fill="var(--faint)"/>
+          <text id="lvT0" x="43"  y="128" text-anchor="middle" fill="var(--txt)" font-size="15" font-family="var(--mono)">–</text>
+          <text id="lvT1" x="177" y="128" text-anchor="middle" fill="var(--txt)" font-size="15" font-family="var(--mono)">–</text>
+          <text id="lvT2" x="43"  y="190" text-anchor="middle" fill="var(--txt)" font-size="15" font-family="var(--mono)">–</text>
+          <text id="lvT3" x="177" y="190" text-anchor="middle" fill="var(--txt)" font-size="15" font-family="var(--mono)">–</text>
+          <text x="110" y="156" text-anchor="middle" fill="var(--faint)" font-size="11" font-family="var(--sans)">Keilhöhe in cm</text>
+        </svg>
+        <p style="color:var(--faint);font-size:11.5px;margin:10px 0 0">
+          Grünes Rad = höchster Punkt (kein Keil). Übrige Räder auf dessen Höhe anheben — das tiefste bekommt den größten Keil.
+        </p>
+      </div>
+    </div>
+
+    <div class="card wide">
+      <div class="ch"><h2>Fahrzeug & Sensor</h2><span class="badge" id="lvCfgBadge">in NVS gespeichert</span></div>
+      <div class="params">
+        <div class="field"><label>Spurweite</label><div class="hint">Seitlicher Radabstand (800–3000 mm).</div>
+          <div class="ip"><input type="number" id="lvTrack" min="800" max="3000"><span class="unit">mm</span></div></div>
+        <div class="field"><label>Radstand</label><div class="hint">Abstand Vorder-/Hinterachse (1500–8000 mm).</div>
+          <div class="ip"><input type="number" id="lvWbase" min="1500" max="8000"><span class="unit">mm</span></div></div>
+        <div class="field"><label>Einbaudrehung</label><div class="hint">Drehung der Platine gegenüber der Fahrtrichtung.</div>
+          <div class="ip"><select id="lvRot">
+            <option value="0">0° — Sensor-X = rechts</option>
+            <option value="90">90°</option>
+            <option value="180">180°</option>
+            <option value="270">270°</option>
+          </select></div></div>
+        <div class="field"><label>Achsen spiegeln</label><div class="hint">Falls beim Anheben das falsche Rad markiert wird, hier umschalten.</div>
+          <div class="ip" style="gap:18px">
+            <label style="display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" id="lvInvR"> Roll</label>
+            <label style="display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" id="lvInvP"> Pitch</label>
+          </div></div>
+        <div class="field"><label>Lagesensor aktiv</label><div class="hint">Modul abschalten, wenn kein Sensor verbaut ist.</div>
+          <div class="ip"><label style="display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" id="lvEnabled"> aktiviert</label></div></div>
+        <div class="actions">
+          <button type="button" class="btn primary" id="lvSaveBtn">Speichern</button>
+          <button type="button" class="btn ghost" id="lvRevertBtn">Verwerfen</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ EINSTELLUNGEN ============ -->
   <section id="cfg" class="view">
     <div class="card wide">
       <div class="ch"><h2>Schaltparameter</h2><span class="badge">in NVS gespeichert</span></div>
@@ -385,6 +465,8 @@ document.querySelectorAll("nav.tabs button").forEach(b=>{b.onclick=()=>{
   if(b.dataset.view==="live")loadLive();
   if(b.dataset.view==="hist")loadSdFiles();
   if(b.dataset.view==="cfg"){if(!paramsLoaded)loadParams();loadTz();loadWifi();}
+  setLevelPolling(b.dataset.view==="lage");
+  if(b.dataset.view==="lage")loadLevelCfg();
 };});
 
 let toastT;function toast(m,k=""){const t=$("toast");t.textContent=m;t.className="show "+k;clearTimeout(toastT);toastT=setTimeout(()=>t.className=t.className.replace("show",""),2600);}
@@ -480,6 +562,7 @@ function render(D){
       : net.sta ? `verbunden · ${net.ip||"?"} · ${net.rssi||0} dBm`
       : "gesucht · nicht in Reichweite";
   }
+  renderLevel(D.level);
 }
 function setSw(id,on){$(id).classList.toggle("on",!!on);}
 function db(v){if(v==null)return"";if(v>0)return`+${v}▲`;if(v<0)return`${v}▼`;return"·";}
@@ -675,6 +758,91 @@ $("wifiSaveBtn").onclick=async()=>{
     if(r.ok&&res.ok){toast(ssid.length?"WLAN gespeichert — verbinde …":"STA deaktiviert","ok");setTimeout(loadWifi,1500);}
     else toast(res.error||"Fehler","bad");
   }catch(_){toast("Speichern fehlgeschlagen","bad");}finally{$("wifiSaveBtn").disabled=false;}
+};
+
+/* ---- Lage / Wasserwaage ---- */
+const LV_WHEELS=[["lvW0","lvT0"],["lvW1","lvT1"],["lvW2","lvT2"],["lvW3","lvT3"]];
+function lvResetView(keepWheels){
+  $("lvBubble").setAttribute("cx",100);$("lvBubble").setAttribute("cy",100);
+  $("lvRing").setAttribute("cx",100);$("lvRing").setAttribute("cy",100);
+  $("lvBubble").setAttribute("fill","var(--faint)");
+  $("lvRing").setAttribute("stroke","var(--faint)");
+  $("lvRoll").textContent="–";$("lvPitch").textContent="–";$("lvState").textContent="–";
+  if(!keepWheels)LV_WHEELS.forEach(([w,t])=>{$(w).setAttribute("fill","var(--faint)");$(t).textContent="–";});
+}
+function renderLevel(L){
+  const badge=$("lvBadge");if(!badge)return;
+  if(!L){badge.textContent="–";lvResetView();return;}
+  if(!L.enabled){badge.textContent="deaktiviert";lvResetView();return;}
+  if(!L.present){badge.textContent="Sensor nicht erkannt";lvResetView();return;}
+  if(!L.valid){badge.textContent="Sensor liest …";lvResetView(true);return;}
+  const ok=!!L.level;
+  badge.innerHTML=ok?'<span style="color:var(--ok)">eben ✓</span>':"Ausgleich nötig";
+  // Libelle: Blase wandert zur hohen Seite (roll>0→rechts höher, pitch>0→Front höher = oben)
+  const SCALE=12,RMAX=74;
+  let dx=(L.roll||0)*SCALE, dy=-(L.pitch||0)*SCALE;
+  const m=Math.hypot(dx,dy);if(m>RMAX){dx*=RMAX/m;dy*=RMAX/m;}
+  const bx=(100+dx).toFixed(1), by=(100+dy).toFixed(1);
+  $("lvBubble").setAttribute("cx",bx);$("lvBubble").setAttribute("cy",by);
+  $("lvRing").setAttribute("cx",bx);$("lvRing").setAttribute("cy",by);
+  $("lvBubble").setAttribute("fill",ok?"var(--ok)":"var(--akku)");
+  $("lvRing").setAttribute("stroke",ok?"var(--ok)":"var(--faint)");
+  $("lvRoll").textContent=fmt(L.roll,2)+" °";
+  $("lvPitch").textContent=fmt(L.pitch,2)+" °";
+  $("lvState").innerHTML=ok?'<span style="color:var(--ok)">eben</span>':'<span style="color:var(--pv)">Keile setzen</span>';
+  // Räder: höchstes (Referenz) grün = kein Keil, Rest amber; Keilhöhe in cm
+  const w=L.wedge||[0,0,0,0], ref=L.ref|0;
+  LV_WHEELS.forEach(([wid,tid],i)=>{
+    const isRef=(i===ref)||((w[i]||0)<=0.5);
+    $(wid).setAttribute("fill",isRef?"var(--ok)":"var(--pv)");
+    $(tid).textContent=isRef?"0":((w[i]||0)/10).toFixed(1);
+  });
+}
+let lvTimer=null;
+async function fetchLevel(){
+  try{const r=await fetch("/api/level",{cache:"no-store"});renderLevel(await r.json());}catch(_){}
+}
+function setLevelPolling(on){
+  if(on){if(!lvTimer){fetchLevel();lvTimer=setInterval(fetchLevel,250);}}
+  else if(lvTimer){clearInterval(lvTimer);lvTimer=null;}
+}
+async function loadLevelCfg(){
+  try{const r=await fetch("/api/levelcfg",{cache:"no-store"});const c=await r.json();
+    $("lvTrack").value=c.track;$("lvWbase").value=c.wheelbase;
+    $("lvRot").value=String(c.rot);
+    $("lvInvR").checked=!!c.invRoll;$("lvInvP").checked=!!c.invPitch;
+    $("lvEnabled").checked=!!c.enabled;
+  }catch(_){toast("Lage-Konfig nicht ladbar","bad");}
+}
+$("lvRevertBtn").onclick=loadLevelCfg;
+$("lvSaveBtn").onclick=async()=>{
+  const body={
+    track:+$("lvTrack").value, wheelbase:+$("lvWbase").value,
+    rot:+$("lvRot").value,
+    invRoll:$("lvInvR").checked, invPitch:$("lvInvP").checked,
+    enabled:$("lvEnabled").checked
+  };
+  if(!(body.track>=800&&body.track<=3000)){toast("Spurweite 800–3000 mm","bad");return;}
+  if(!(body.wheelbase>=1500&&body.wheelbase<=8000)){toast("Radstand 1500–8000 mm","bad");return;}
+  $("lvSaveBtn").disabled=true;
+  try{const r=await fetch("/api/levelcfg",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    const res=await r.json();
+    if(r.ok&&res.ok){toast("Lage-Konfig gespeichert","ok");loadLevelCfg();}else toast(res.error||"Fehler","bad");
+  }catch(_){toast("Speichern fehlgeschlagen","bad");}finally{$("lvSaveBtn").disabled=false;}
+};
+$("lvCalibBtn").onclick=async()=>{
+  $("lvCalibBtn").disabled=true;
+  try{const r=await fetch("/api/levelcalib",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({reset:false})});
+    const res=await r.json();
+    if(r.ok&&res.ok){toast("Null-Offset gespeichert","ok");fetchLevel();}else toast(res.error||"Keine gültige Messung","bad");
+  }catch(_){toast("Kalibrierung fehlgeschlagen","bad");}finally{$("lvCalibBtn").disabled=false;}
+};
+$("lvResetBtn").onclick=async()=>{
+  $("lvResetBtn").disabled=true;
+  try{const r=await fetch("/api/levelcalib",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({reset:true})});
+    const res=await r.json();
+    if(r.ok&&res.ok){toast("Null zurückgesetzt","ok");fetchLevel();}else toast(res.error||"Fehler","bad");
+  }catch(_){toast("Reset fehlgeschlagen","bad");}finally{$("lvResetBtn").disabled=false;}
 };
 
 /* Start */
