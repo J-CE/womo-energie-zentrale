@@ -10,6 +10,14 @@
 //     daher unabhängig vom schmalen 5mm-Rand realisierbar
 //   - Kabeldurchlässe: Unterkante ab 11mm über dem Boden
 //
+//  FIX v3.1:
+//   - Platinenhalter (Standoffs) waren NICHT mit dem Boden verschmolzen:
+//     Bodenoberkante liegt bei z=wall_t (2.4), die Füße saßen aber bei
+//     z=floor_t (2.6) -> 0.2mm Luftspalt. Füße starten jetzt bei z=0 und
+//     verschmelzen voll mit dem Boden. Pilotloch ist jetzt ein SACKLOCH
+//     (kein Loch durch den Gehäuseboden).
+//   - Pilotloch-Durchmesser auf PC-Mainboard-Schraube (#6-32 UNC) ausgelegt.
+//
 //  Achsen (wie in der Aufbau-Skizze):
 //    X = kurze Kante (110mm außen / 100mm Platine), Y = lange Kante (170/160mm)
 //    y=0   : OBEN  (Stromkabel-Eingang)        y=Y_out : UNTEN (Landstrom/Klemmen)
@@ -35,9 +43,12 @@ margin = (X_out-board_X)/2; // = 5mm, ergibt sich aus den Vorgaben (zentriert)
 /* [Platinenhalter] */
 standoff_spacing_X = 91.5;   // 151x91 Lochabstand
 standoff_spacing_Y = 152;
-standoff_h   = 8;          // Höhe der Platinenhalter
+standoff_h   = 8;          // Höhe der Platinenhalter ÜBER dem Boden
 standoff_d   = 7;
-screw_pilot_d= 2.6;        // M3 selbstschneidend
+// Pilotloch für selbstschneidende Schraube:
+//   #6-32 UNC (PC-Mainboard-Schraube, ~3.5mm Außen-d) -> 2.8 mm
+//   M3 selbstschneidend                                -> 2.5..2.6 mm
+screw_pilot_d= 2.8;
 
 /* [Gesamtmaße] */
 wall_t   = 2.4;
@@ -45,7 +56,7 @@ corner_r = 6;              // jetzt frei wählbar (keine Schraubdome mehr in der
 floor_t  = 2.6;
 lid_top_t= 2.6;
 lid_skirt= 8;
-fit_gap  = 0.25;
+fit_gap  = 0.32;           // X1C-Überstülpfit (vorher 0.25; +Elefantenfuß-Reserve)
 internal_H = 55;           // Gesamtinnenhöhe Boden -> Deckel-Unterseite (FEST)
 base_wall_h = floor_t + internal_H; // Außenhöhe der Wanne
 
@@ -58,11 +69,17 @@ top_slot_x = 2;   top_slot_w = 43;  top_slot_h = 16;             // Eingang/Stro
 left_mppt_y0 = 10;  left_mppt_y1 = 28;  left_mppt_d = 12;        // MPPT VE.Direct (Wand LINKS)
 left_main_y0 = 72;  left_main_y1 = 124; left_main_h = 30;        // Gel-Lader + RS485 + VOUT li.
 
-right_ant_y0 = 15;  right_ant_y1 = 28;  right_ant_d = 15;        // Antenne/Sensorkabel (Wand RECHTS)
-right_usb_y0 = 44;  right_usb_y1 = 58;  right_usb_d = 11;        // USB-C Programmierkabel
+right_pwr_y0 = 15;  right_pwr_y1 = 28;  right_pwr_d = 15;        // Stromversorgung (Wand RECHTS)
+right_mppt_y0= 44;  right_mppt_y1= 58;  right_mppt_d= 11;        // MPPT-Kabel
 right_main_y0= 72;  right_main_y1= 124; right_main_h = 30;       // D+ + VOUT re.
 
 bottom_slot_x = 15; bottom_slot_w = 70; bottom_slot_h = 10;      // Landstrom + Klemmen (Wand UNTEN)
+
+// Rechteck-Ausschnitt RECHTS (ersetzt die 2 Rundlöcher Stromversorgung + MPPT):
+// von der äußersten Kante des Stromversorgungslochs (A) bis zur fernsten Kante des MPPT-Lochs (B).
+right_slot_y0 = right_pwr_y0 - right_pwr_d/2;     // = 7.5  (äußerster Punkt Loch A = Stromversorgung)
+right_slot_y1 = right_mppt_y0 + right_mppt_d/2;   // = 49.5 (entferntester Punkt Loch B = MPPT)
+right_slot_h  = bottom_slot_h;                    // Höhe analog zum unteren Rechteck-Ausschnitt (=10)
 
 /* [Lüftung im Deckel über den MOSFET-Modulen] */
 vent_count = 5;
@@ -79,8 +96,10 @@ led_y = 70;    // board-lokal, lange Achse
 led_d = 11;
 
 /* [Rastnasen / Schnapp-Verbindung Deckel<->Wanne] */
-snap_r       = 1.7;   // Kugelradius Vertiefung (Wanne)
-snap_r_lid   = 1.45;  // Kugelradius Nase (Deckel, etwas kleiner)
+// Nasenzentrum liegt auf der Wannen-Außenfläche -> Eingriffstiefe = snap_r_lid.
+// Sitzspiel Nase<->Mulde = snap_r - snap_r_lid.
+snap_r       = 1.2;   // Kugelradius Vertiefung (Wanne)  (vorher 1.7)
+snap_r_lid   = 0.9;   // Kugelradius Nase (Deckel) -> 0,90mm Eingriff (vorher 1.45 = zu steif)
 snap_below_top = 4;   // Abstand der Schnapp-Ebene von der Wannenoberkante
 // Punkte auf dem AUSSENUMFANG der Wanne [x,y] – Lücken zu allen Kabeldurchlässen geprüft
 snap_points = [
@@ -109,6 +128,10 @@ module shell(l, w, h, r, t) {
 }
 
 // ---- Platinenhalter (4x, zentriert auf 91x151 Lochabstand) ----
+// h = Höhe ÜBER dem Boden. Der Fuß startet bei z=0 und reicht bis floor_t+h,
+// damit er garantiert mit der Bodenplatte (z=0..wall_t) verschmilzt.
+// Das Pilotloch ist ein SACKLOCH: es beginnt erst bei z=floor_t und geht
+// nicht durch den Boden -> keine Bohrung im Gehäuseboden.
 module board_standoffs(h) {
     cx0 = X_out/2 - standoff_spacing_X/2;
     cx1 = X_out/2 + standoff_spacing_X/2;
@@ -116,10 +139,12 @@ module board_standoffs(h) {
     cy1 = Y_out/2 + standoff_spacing_Y/2;
     positions = [[cx0,cy0],[cx1,cy0],[cx0,cy1],[cx1,cy1]];
     for (p = positions) {
-        translate([p[0], p[1], floor_t])
+        translate([p[0], p[1], 0])
             difference() {
-                cylinder(d=standoff_d, h=h, $fn=32);
-                translate([0,0,-0.1]) cylinder(d=screw_pilot_d, h=h+0.2, $fn=24);
+                cylinder(d=standoff_d, h=floor_t + h, $fn=48);
+                // Sackloch: Start bei floor_t, Tiefe = h (+0.1 sauberer Durchbruch oben)
+                translate([0,0,floor_t])
+                    cylinder(d=screw_pilot_d, h=h+0.1, $fn=24);
             }
     }
 }
@@ -139,10 +164,10 @@ module cutouts() {
     //    cube([wall_t+2, left_main_y1-left_main_y0, left_main_h]);
 
     // Wand RECHTS (x=X_out)
-    translate([X_out-wall_t-1, ox+right_ant_y0, cut_z0+right_ant_d/2])
-        rotate([0,90,0]) cylinder(d=right_ant_d, h=wall_t+2, $fn=32);
-    translate([X_out-wall_t-1, ox+right_usb_y0, cut_z0+right_usb_d/2])
-        rotate([0,90,0]) cylinder(d=right_usb_d, h=wall_t+2, $fn=32);
+    // EIN Rechteck-Ausschnitt statt der beiden Rundlöcher (Stromversorgung A + MPPT B):
+    // Y-Spanne von der äußersten Kante von A bis zur fernsten Kante von B.
+    translate([X_out-wall_t-1, ox+right_slot_y0, cut_z0])
+        cube([wall_t+2, right_slot_y1-right_slot_y0, right_slot_h]);
     //translate([X_out-wall_t-1, ox+right_main_y0, cut_z0])
     //    cube([wall_t+2, right_main_y1-right_main_y0, right_main_h]);
 
@@ -177,17 +202,23 @@ module base_tray() {
     }
 }
 
-// ---- Deckel ----
+// ---- Deckel (ÜBERSTÜLPEN: Skirt umschließt die Wanne von AUSSEN) ----
+// ov = Überstand des Skirts über die Box-Außenkontur (Spalt + eigene Skirt-Wandstärke).
+// Skirt-Innenkante liegt bei X_out+2*fit_gap / Y_out+2*fit_gap (Spiel über der Box-Außenwand),
+// Skirt-Außenkante (= Deckplatten-Außenkante) liegt bei X_out+2*ov / Y_out+2*ov.
+ov = fit_gap + wall_t;
+
 module lid() {
     union() {
         difference() {
             union() {
-                linear_extrude(lid_top_t) rounded_rect(X_out, Y_out, corner_r);
-                translate([0,0,-lid_skirt])
+                translate([-ov, -ov, 0])
+                    linear_extrude(lid_top_t) rounded_rect(X_out+2*ov, Y_out+2*ov, corner_r+ov);
+                translate([-ov, -ov, -lid_skirt])
                     difference() {
-                        linear_extrude(lid_skirt) rounded_rect(X_out, Y_out, corner_r);
-                        translate([wall_t+fit_gap, wall_t+fit_gap, -0.1])
-                            linear_extrude(lid_skirt+0.2) rounded_rect(X_out-2*(wall_t+fit_gap), Y_out-2*(wall_t+fit_gap), max(corner_r-wall_t,0.5));
+                        linear_extrude(lid_skirt) rounded_rect(X_out+2*ov, Y_out+2*ov, corner_r+ov);
+                        translate([ov-fit_gap, ov-fit_gap, -0.1])
+                            linear_extrude(lid_skirt+0.2) rounded_rect(X_out+2*fit_gap, Y_out+2*fit_gap, max(corner_r+fit_gap,0.5));
                     }
             }
             // Lüftungsschlitze über den MOSFET-Modulen (links: Gel-Lader, rechts: D+)
