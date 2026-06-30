@@ -73,9 +73,21 @@
 #define SPI_SD_MOSI                 13
 #define SPI_SD_MISO                 14
 
-// ── I2C — DS3231 RTC (reserviert, noch nicht bestückt) ───────
+// ── I2C — DS3231 RTC (bestückt) + optionaler Lagesensor ──────
+// EIN gemeinsamer Bus (SDA=GPIO1, SCL=GPIO2). Adressen kollisionsfrei:
+//   DS3231 = 0x68 | MMA8452 = 0x1D (SA0=1) bzw. 0x1C (SA0=0).
+// Alle Bus-Zugriffe laufen unter g_i2cMutex (siehe clock.h).
 #define I2C_RTC_SDA                 1
 #define I2C_RTC_SCL                 2
+
+// ── Lagesensor (Wasserwaage, OPTIONAL) — MMA8452 am I2C-Bus ──
+// 3-Achs-Accelerometer; misst im Stillstand die Schwerkraft → Neigung.
+// Versorgung 3,3V direkt (max. 3,6V), KEIN Pegelwandler/GPIO nötig —
+// nur SDA/SCL/3V3/GND. Modul fehlt → Feature meldet "nicht erkannt".
+#define LEVEL_I2C_ADDR_PRIMARY      0x1D        // SA0=1 (Default-Breakout)
+#define LEVEL_I2C_ADDR_ALT          0x1C        // SA0=0
+#define LEVEL_POLL_INTERVAL_MS      250         // 4 Hz — flüssiges Leveling
+#define LEVEL_TOLERANCE_DEG         0.3f        // |roll|,|pitch| darunter = eben
 
 // ── Digitale Eingänge ────────────────────────────────────────
 #define GPIO_LANDSTROM_SENSOR       18          // INPUT, Spannungsteiler 2k/1,5k von 5V, HIGH = Landstrom
@@ -222,3 +234,9 @@
 
 // ── Logging ──────────────────────────────────────────────────
 #define DEFAULT_LOG_INTERVAL_MS     900000      // 15 Minuten SD-Batch
+
+// ── Lagesensor — Default-Fahrzeuggeometrie (NVS-überschreibbar) ──
+// Spurweite = seitlicher Radabstand, Radstand = Abstand Vorder-/Hinterachse.
+// Im Dashboard (Tab "Lage") einstellbar; nur für die Keilhöhen-Berechnung.
+#define DEFAULT_TRACK_MM            1800        // mm Spurweite
+#define DEFAULT_WHEELBASE_MM        3500        // mm Radstand

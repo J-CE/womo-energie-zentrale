@@ -24,6 +24,13 @@
 // ============================================================
 #pragma once
 #include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+
+// Gemeinsamer I2C-Bus-Mutex (DS3231-RTC + optionaler Lagesensor MMA8452).
+// clock.cpp besitzt die Wire-Initialisierung und erzeugt den Mutex in
+// clock_init(); jeder Bus-Nutzer nimmt ihn vor seiner Transaktion.
+extern SemaphoreHandle_t g_i2cMutex;
 
 void     clock_init();
 bool     clock_set_epoch(uint32_t epoch);   // false = unplausibel (< 2024)

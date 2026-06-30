@@ -41,6 +41,9 @@
 
 static Preferences cprefs;
 static portMUX_TYPE s_clock_mux = portMUX_INITIALIZER_UNLOCKED;
+
+// Gemeinsamer I2C-Bus-Mutex (DS3231 + Lagesensor). In clock_init() erzeugt.
+SemaphoreHandle_t g_i2cMutex = nullptr;
 static uint64_t s_baseUs   = 0;
 static bool     s_hasTime  = false;
 static bool     s_synced   = false;
@@ -198,6 +201,10 @@ void clock_init() {
     Wire.setClock(100000);
     delay(100);                  // I2C-Block + DS3231 settlen lassen
 
+    // Bus-Mutex erzeugen, BEVOR irgendein Task auf den I2C-Bus zugreift.
+    // (Boot-Pfad hier ist single-threaded — Schutz greift erst zur Laufzeit.)
+    if (!g_i2cMutex) g_i2cMutex = xSemaphoreCreateMutex();
+
     cprefs.begin("clock", false);
 
     // Zeitzone aus NVS laden (Default Europe/Berlin) und an libc übergeben.
@@ -258,7 +265,11 @@ bool clock_set_epoch(uint32_t epoch) {
     s_synced  = true;
     cprefs.putULong("epoch", epoch);
     s_lastPersistEpoch = epoch;
-    ds3231_write_epoch(epoch);            // Hardware-Uhr stellen
+    // Kann aus dem AsyncTCP-Handler (/api/time) kommen → Bus-Mutex Pflicht.
+    if (g_i2cMutex && xSemaphoreTake(g_i2cMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        ds3231_write_epoch(epoch);        // Hardware-Uhr stellen
+        xSemaphoreGive(g_i2cMutex);
+    }
     s_lastResyncDay = clock_now() / 86400UL;  // heute (UTC) kein Resync mehr
     Serial.printf("[CLOCK] Sync UTC=%lu lokal=%lu\n",
                   (unsigned long)epoch,
@@ -277,19 +288,12 @@ uint32_t clock_now() {
 }
 
 // ── Lokaler Offset (s) für einen UTC-Zeitpunkt — DST-korrekt ───
-// localtime_r liefert die lokalen Wanduhr-Felder gemäß gesetztem
-// POSIX-TZ (inkl. Sommerzeit). tm_gmtoff ist in dieser newlib-Variante
-// NICHT verfügbar — daher die Wanduhr-Felder mit der eigenen,
-// zeitzonenfreien ymd_to_epoch() als UTC interpretieren und gegen die
-// echte UTC differenzieren. Ergebnis = lokaler Offset inkl. DST.
+// localtime_r füllt tm_gmtoff gemäß gesetztem POSIX-TZ (inkl. Sommerzeit).
 int32_t clock_local_offset_at(uint32_t utc) {
     time_t t = (time_t)utc;
     struct tm lt;
     localtime_r(&t, &lt);
-    uint32_t localAsUtc = ymd_to_epoch(lt.tm_year + 1900, lt.tm_mon + 1,
-                                       lt.tm_mday, lt.tm_hour,
-                                       lt.tm_min, lt.tm_sec);
-    return (int32_t)(localAsUtc - utc);
+    return (int32_t)lt.tm_gmtoff;
 }
 
 uint32_t clock_now_local() {
@@ -324,7 +328,12 @@ static void rtc_midnight_resync() {
     if (today == s_lastResyncDay) return;      // noch kein neuer Tag
 
     uint32_t rtcEpoch;
-    if (ds3231_read_epoch(rtcEpoch)) {
+    bool got = false;
+    if (g_i2cMutex && xSemaphoreTake(g_i2cMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        got = ds3231_read_epoch(rtcEpoch);
+        xSemaphoreGive(g_i2cMutex);
+    }
+    if (got) {
         int32_t drift  = (int32_t)(clock_now() - rtcEpoch);  // intern − RTC
         s_lastDriftSec = drift;
         s_haveDrift    = true;
@@ -344,8 +353,13 @@ static void rtc_health_update() {
     if ((uint32_t)(millis() - s_lastHealthMs) < 10000) return;
     s_lastHealthMs = millis();
     float t;
-    if (ds3231_read_temp(t)) { s_rtcTempC = t; s_rtcPresentLive = true; }
-    else                       s_rtcPresentLive = false;
+    bool got = false;
+    if (g_i2cMutex && xSemaphoreTake(g_i2cMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+        got = ds3231_read_temp(t);
+        xSemaphoreGive(g_i2cMutex);
+    }
+    if (got) { s_rtcTempC = t; s_rtcPresentLive = true; }
+    else       s_rtcPresentLive = false;
 }
 
 void clock_persist(bool force) {

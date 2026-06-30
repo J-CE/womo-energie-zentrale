@@ -26,11 +26,13 @@
 #include "http_server.h"
 #include "watchdog.h"
 #include "clock.h"
+#include "level.h"
 
 static TaskHandle_t h_logic  = nullptr;
 static TaskHandle_t h_mppt   = nullptr;
 static TaskHandle_t h_logger = nullptr;
 static TaskHandle_t h_ws     = nullptr;
+static TaskHandle_t h_level  = nullptr;
 
 // ── BMS abfragen + Logik (Core 1, 2s-Takt) ───────────────────
 static void logic_task(void*) {
@@ -116,12 +118,14 @@ void setup() {
     logic_init();
     logger_init();
     clock_init();
+    level_init();         // Lagesensor (optional) — nach clock_init: Wire + g_i2cMutex bereit
     webserver_init();
 
     xTaskCreatePinnedToCore(logic_task,  "logic",  8192, nullptr, 4, &h_logic,  1);
     xTaskCreatePinnedToCore(mppt_task,   "mppt",   4096, nullptr, 3, &h_mppt,   1);
     xTaskCreatePinnedToCore(logger_task, "logger", 4096, nullptr, 2, &h_logger, 0);
     xTaskCreatePinnedToCore(ws_task,     "ws",     4096, nullptr, 2, &h_ws,     0);
+    xTaskCreatePinnedToCore(level_task,  "level",  4096, nullptr, 1, &h_level,  0);
 
     esp_task_wdt_init(WDT_TIMEOUT_MS / 1000, true);
     esp_task_wdt_add(nullptr);
