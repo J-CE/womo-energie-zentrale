@@ -44,6 +44,12 @@
   .dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
   .dot.off{background:var(--bad);box-shadow:0 0 8px var(--bad)}
   .dot.warn{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+  /* Status-LED Wechselrichter: aus (grau) / grün (Power) / rot (Alarm) */
+  .led{display:inline-block;width:11px;height:11px;border-radius:50%;
+    background:#2a3138;border:1px solid var(--line2);vertical-align:middle;
+    transition:background .2s,box-shadow .2s}
+  .led.green{background:var(--ok);border-color:var(--ok);box-shadow:0 0 9px var(--ok)}
+  .led.red{background:var(--bad);border-color:var(--bad);box-shadow:0 0 9px var(--bad)}
 
   nav.tabs{display:flex;gap:2px;margin-top:11px;background:var(--bg2);
     border:1px solid var(--line);border-radius:11px;padding:3px}
@@ -276,7 +282,7 @@
           <span class="k">Freier Heap</span><span class="v" id="sHeap">–</span>
           <span class="k">Freier PSRAM</span><span class="v" id="sPsram">–</span>
           <span class="k">Laufzeit</span><span class="v" id="sUp">–</span>
-          <span class="k">Wechselrichter</span><span class="v" id="sInv">Stub</span>
+          <span class="k">Wechselrichter</span><span class="v"><span class="led" id="ledInv"></span> <span id="sInv">–</span></span>
         </div>
       </div>
     </div>
@@ -473,7 +479,20 @@ function render(D){
       +` <span style="color:var(--faint)">(min ${(sys.min_heap/1024).toFixed(1)})</span>`;
   } else $("sHeap").textContent="–";
   $("sPsram").textContent=sys.psram!=null?`${(sys.psram/1024/1024).toFixed(2)} MB`:"–";
-  const inv=D.inv||{};$("sInv").textContent=inv.note||"Stub";
+  const inv=D.inv||{};
+  {
+    const led=$("ledInv"), lbl=$("sInv");
+    led.classList.remove("green","red");
+    if(!inv.valid){
+      lbl.textContent="–";                       // kein gültiger Status (vor erstem Poll / Mutex-Timeout)
+    }else if(inv.alarm){
+      led.classList.add("red");  lbl.textContent="Alarm";   // Alarm hat Vorrang
+    }else if(inv.power_on){
+      led.classList.add("green"); lbl.textContent="Ein";
+    }else{
+      lbl.textContent="Aus";                      // LED grau (Grundzustand)
+    }
+  }
   const net=D.net;const wn=$("wifiNow");
   if(net&&wn){
     wn.textContent = !net.sta_en ? "STA aus · reiner AP-Betrieb"

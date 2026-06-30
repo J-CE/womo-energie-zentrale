@@ -1,9 +1,10 @@
 // ============================================================
-//  config.h — Womo Energy Core v5.1
+//  config.h — Womo Energy Core v5.3
 //  Zielplattform: ESP32-S3 DevKitC-1 N16R8
 //
 //  GPIO-Reservierungen ESP32-S3 N16R8:
 //  ├─ GPIO  0,3      Strapping                  → gesperrt
+//  ├─ GPIO  4,5      WR-Status (Renogy NVS Power-/Alarm-LED)
 //  ├─ GPIO 19,20     USB D-/D+                  → freigehalten
 //  ├─ GPIO 26–37     Intern Flash/PSRAM          → gesperrt
 //  ├─ GPIO 39–42     Default-JTAG (MTCK…MTMS)
@@ -52,11 +53,19 @@
 #define UART_MPPT_TX                42          // neu v5.0 (war -1)
 #define UART_MPPT_BAUD              19200
 
-// Wechselrichter RJ12 Sniffer (Stub)
-#define UART_INV_PORT               0
-#define UART_INV_RX                 -1
-#define UART_INV_TX                 -1
-#define UART_INV_BAUD               9600
+// Wechselrichter Status (Renogy 12V/2000W mit NVS) — v5.3
+// Kein Datenprotokoll vorhanden (anders als bei BMS/MPPT) — der
+// RJ11/RJ12-Fernbedienungsport liefert nur zwei rohe LED-Spannungs-
+// pegel (Power=grün, Alarm=rot) + einen Schalterkontakt für die
+// Fernsteuerung (separat, s. GPIO_OPTO_WR_REMOTE unten).
+// ACHTUNG: Pinbelegung am Fernbedienungsport variiert je Renogy-
+// Modell/Charge (Forenberichte uneinheitlich) — vor Verkabelung mit
+// Multimeter verifizieren (Pegel in beiden Zuständen messen, danach
+// ggf. Spannungsteiler-Werte und WR_LED_ACTIVE anpassen).
+// GPIO 4/5 gewählt: frei, kein Strapping/JTAG/SPI/UART-Konflikt.
+#define GPIO_WR_LED_POWER           4     // Power-LED (grün), über Spannungsteiler
+#define GPIO_WR_LED_ALARM           5     // Alarm-LED (rot),  über Spannungsteiler
+#define WR_LED_ACTIVE               HIGH  // nach Messung ggf. auf LOW ändern
 
 // ── SPI — SD-Karte ───────────────────────────────────────────
 #define SPI_SD_CS                   11
@@ -79,6 +88,7 @@
 #define MOSFET_GEL_ACTIVE           HIGH
 
 #define GPIO_OPTO_WR_REMOTE         40          // Active-HIGH (JTAG-MTDO)
+                                                  // Renogy NVS: Brücke Schalterkontakt am Fernbedienungsport
 #define OPTO_WR_ACTIVE              HIGH
 
 #define GPIO_STATUS_LED             41          // Active-HIGH (JTAG-MTDI)
@@ -186,8 +196,14 @@
 #define DEFAULT_PV_GEL_MIN_W            60      // W Mindest-PV (v5.0: 30→60W)
 
 // ── Wechselrichter Remote (SoC-basiert, kein PV-Check) ───────
-// EIN:      SoC >= socWROn  UND  kein Landstrom  UND  BMS gültig
-// AUS hart: Landstrom  ODER  BMS ungültig/veraltet
+// v5.3: Landstrom-Abhängigkeit entfernt — der Renogy-Wechselrichter
+// hat eine eingebaute NVS (Netzvorrangschaltung) und übernimmt die
+// AC-seitige Umschaltung Landstrom/Inverter selbst. Ein hartes
+// Abschalten der Fernsteuerung bei Landstrom ist bei diesem Gerät
+// nicht nötig (anders als bei der ursprünglich vorgesehenen Edecoa-
+// Lösung ohne NVS).
+// EIN:      SoC >= socWROn  UND  BMS gültig
+// AUS hart: BMS ungültig/veraltet
 // AUS weich:SoC < socWROff
 #define DEFAULT_SOC_WR_ON               95      // %
 #define DEFAULT_SOC_WR_OFF              80      // %

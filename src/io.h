@@ -5,7 +5,7 @@
 //  Ausgänge (alle Fail-Safe LOW bei Reset):
 //    GPIO_RELAY_D_PLUS   21  Active-LOW   D+-Relais Kühlschrank
 //    GPIO_MOSFET_GEL     39  Active-HIGH  Gel-Lader MOSFET
-//    GPIO_OPTO_WR_REMOTE 40  Active-HIGH  WR-Remote Optokoppler
+//    GPIO_OPTO_WR_REMOTE 40  Active-HIGH  WR-Remote Optokoppler (Renogy NVS Schalterkontakt-Brücke)
 //    GPIO_STATUS_LED     41  Active-HIGH  Status-LED
 //  Eingänge:
 //    GPIO_LANDSTROM_SENSOR 18 INPUT (Teiler 2k/1,5k von 5V) HIGH=Landstrom

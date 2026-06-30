@@ -64,10 +64,8 @@ base_wall_h = floor_t + internal_H; // Außenhöhe der Wanne
    X/Y weiterhin Schätzungen anhand Skizze, Board-lokal (x:0..100, y:0..160) */
 cut_z0 = floor_t + 10;
 
-top_slot_x = 2;   top_slot_w = 43;  top_slot_h = 16;             // Eingang/Stromkabel (Wand OBEN)
 
-left_mppt_y0 = 10;  left_mppt_y1 = 28;  left_mppt_d = 12;        // MPPT VE.Direct (Wand LINKS)
-left_main_y0 = 72;  left_main_y1 = 124; left_main_h = 30;        // Gel-Lader + RS485 + VOUT li.
+left_main_y0 = 52;  left_main_y1 = 80; left_main_h = 20;        // USB Wand Links
 
 right_pwr_y0 = 15;  right_pwr_y1 = 28;  right_pwr_d = 15;        // Stromversorgung (Wand RECHTS)
 right_mppt_y0= 44;  right_mppt_y1= 58;  right_mppt_d= 11;        // MPPT-Kabel
@@ -160,8 +158,8 @@ module cutouts() {
     // Wand LINKS (x=0)
     //translate([-1, ox+left_mppt_y0, cut_z0+left_mppt_d/2])
     //    rotate([0,90,0]) cylinder(d=left_mppt_d, h=wall_t+2, $fn=32);
-    //translate([-1, ox+left_main_y0, cut_z0])
-    //    cube([wall_t+2, left_main_y1-left_main_y0, left_main_h]);
+    translate([-1, ox+left_main_y0, cut_z0])
+        cube([wall_t+2, left_main_y1-left_main_y0, left_main_h]);
 
     // Wand RECHTS (x=X_out)
     // EIN Rechteck-Ausschnitt statt der beiden Rundlöcher (Stromversorgung A + MPPT B):

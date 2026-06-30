@@ -1,5 +1,10 @@
 // ============================================================
-//  logic.cpp — Womo Energy Core v5.1
+//  logic.cpp — Womo Energy Core v5.3
+//
+//  v5.3 Änderungen:
+//   • WR-Remote: Landstrom-Abhängigkeit entfernt (Renogy NVS
+//     übernimmt AC-Umschaltung selbst, Edecoa-Annahme ohne NVS
+//     entfällt) — EIN/AUS nur noch SoC- und BMS-basiert
 //
 //  v5.1 Änderungen:
 //   • RGB-LED: Rundlauf-Bitmask statt Prioritäts-Enum (s. io.h/io.cpp)
@@ -175,17 +180,19 @@ void logic_evaluate() {
             io_set_mosfet_gel(want);
     }
 
-    // ── 3. Wechselrichter Remote (nur SoC + Landstrom) ───
-    // Kein MPPT-Check, kein PV-Check (v5.0)
+    // ── 3. Wechselrichter Remote (nur SoC, kein Landstrom-Check) ─
+    // v5.3: Renogy NVS übernimmt AC-Umschaltung selbst — Fernsteuerung
+    // muss bei Landstrom nicht mehr hart abschalten (anders als bei
+    // der ursprünglich vorgesehenen Edecoa-Lösung ohne NVS).
+    // Kein MPPT-Check, kein PV-Check.
     {
         bool cur  = g_io.wrRemote;
         bool want = cur;
-        if (!cur && bms_ok && !landstrom && soc >= g_params.socWROn)
+        if (!cur && bms_ok && soc >= g_params.socWROn)
             want = true;
 
         const char* off = nullptr;
-        if (!off && !bms_ok)               off = "BMS veraltet/ungültig";
-        if (!off && landstrom)             off = "Landstrom";
+        if (!off && !bms_ok)                 off = "BMS veraltet/ungültig";
         if (!off && soc < g_params.socWROff) off = "SoC < WROff";
         if (off) want = false;
 

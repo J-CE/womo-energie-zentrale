@@ -8,7 +8,8 @@
 //                 AUS weich: PV<Off UND SoC<High (min. 5min Laufzeit)
 //    Gel-MOSFET:  SoC>=On UND PV(MA)>=GelMin
 //                 AUS: wie D+, ohne min. Laufzeit
-//    WR-Remote:   SoC>=On UND kein Landstrom UND BMS ok
+//    WR-Remote:   SoC>=On UND BMS ok (v5.3: kein Landstrom-Check mehr —
+//                 Renogy NVS übernimmt AC-Umschaltung selbst)
 //                 Kein PV-Check
 //  PV-MA: 15-Sample Moving Average (30s), MPPT-Debounce: 5 Frames
 // ============================================================

@@ -305,9 +305,9 @@ P-SW03 | GPIO-BELEGUNG (FINAL, ESP32-S3 N16R8)  [GEÄNDERT v5.1]
   GPIO 12   → SPI CLK   SD-Karte
   GPIO 13   → SPI MOSI  SD-Karte
   GPIO 14   → SPI MISO  SD-Karte
-  GPIO 15   → DE/RE     MAX485 (Richtungssteuerung RS485)
-  GPIO 16   → UART1 RX  JK-BMS empfangen (Standard) / CAN RX (alt.)
-  GPIO 17   → UART1 TX  JK-BMS senden (Standard) / CAN TX (alt.)
+  GPIO 15   → frei       kein MAX485 mehr (JK-BMS direkt am GPS-Port)
+  GPIO 16   → UART1 RX  JK-BMS direkt vom GPS-Port (TTL) / CAN RX (alt.)
+  GPIO 17   → UART1 TX  JK-BMS direkt zum GPS-Port (TTL) / CAN TX (alt.)
   GPIO 18   → INPUT     Landstrom-Sensor (Optokoppler, PULLUP)
   GPIO 21   → OUTPUT    D+-Relais Kühlschrank (Active-LOW)
   GPIO 38   → UART2 RX  VE.Direct MPPT Text-Protokoll (RX-only Pfad)
@@ -323,12 +323,15 @@ P-SW03 | GPIO-BELEGUNG (FINAL, ESP32-S3 N16R8)  [GEÄNDERT v5.1]
               kein Pegelwandler für TX-Richtung erforderlich.
   GESPERRT: 0,3,19,20,26-37,45,46 (Strapping/Flash/USB/PSRAM)
   RESERVIERT ANALOG: GPIO 4–10 (ADC1-sicher, für Erweiterungen)
-  GPIO 16/17 bei CAN-Build (BMS_USE_CAN): MAX485 entfällt, statt-
-    dessen CAN-Transceiver (z. B. SN65HVD230, 3,3V) an denselben Pins.
+  GPIO 16/17 bei CAN-Build (BMS_USE_CAN): statt der UART-TTL-Direkt-
+    verbindung zum GPS-Port sitzt an denselben Pins ein CAN-
+    Transceiver (z. B. SN65HVD230, 3,3V).
 
 P-SW04 | SERIELLE SCHNITTSTELLEN  [GEÄNDERT]
   UART1 (BMS):  GPIO 16 RX / 17 TX, 115200 Baud, 8N1
-                DE/RE MAX485 über GPIO 15 (HIGH=Senden, LOW=Empfang)
+                Direktverdrahtung zum JK-BMS-GPS-Port (UART-TTL, kein
+                MAX485). GPIO 15 unbeschaltet (DE/RE-Toggle in
+                bms.cpp bleibt No-Op).
                 Polling: Query-Frame alle 2000ms; adaptiver Empfang
                 (Abbruch bei 40ms Pause oder vollständigem Frame)
   UART2 (MPPT): GPIO 38 RX / GPIO 42 TX, 19200 Baud, 8N1
@@ -570,12 +573,19 @@ P-SW16 | BEKANNTE OFFENE PUNKTE (SOFTWARE)  [GEÄNDERT v5.1]
      Zeitquelle, übersteht Stromausfälle eigenständig (siehe L-SW19).
 
   OFFEN:
-  1. Physische RS485-Verkabelung MAX485 ↔ JK-BMS (3-Pin A/B/GND am
-     CAN/RS485-Port, NICHT am GPS/UART-Port mit TTL-Pegel) steht noch
-     aus — aktuell nächster Hardware-Meilenstein. Bis dahin ist ein
-     Red-Blink-Fehler am BMS-Kanal erwartetes Verhalten, kein Bug.
-     GND vor dem Anschließen mit Multimeter verifizieren; BMS-Menü
-     auf Protokoll "RS485 Modbus" stellen.
+  1. JK-BMS-Verkabelung: 3-Pin-JST-GH-Stecker (CAN/RS485-Port) nicht
+     beschaffbar — umgestellt auf direkte UART-TTL-Verdrahtung am
+     GPS-Port (4-Pin, vorhandener Steckertyp), KEIN MAX485 mehr.
+     Pin 4 (VBAT, volle Pack-Spannung) bleibt unbeschaltet. Pinpegel
+     am Gerät verifiziert: Pin 2/3 ~2,5V (Standard-Pinbelegung,
+     keine Spiegelung bei diesem Exemplar). BMS-Menü weiterhin auf
+     Protokoll "RS485 Modbus" stellen (gilt unabhängig vom Port).
+     OFFEN: erste Kommunikationsverifikation. Community-Berichte
+     deuten an, dass JK-Firmware ab ca. V11.28 über den GPS-Port
+     teils nicht mehr antwortet — unser Gerät (FW V11.287H) liegt
+     genau in diesem Bereich. Bei Stille: TX/RX (Pin 2/3) tauschen,
+     dann ggf. Fallback auf bmscan.cpp (CAN) oder MAX485-Doppel-
+     brücke (TTL→RS485→TTL, beide Module bereits vorhanden).
   2. WR-Sniffer (Edecoa): inverter.cpp bleibt Stub.
      → Phase 2: Protokoll-Analyse nach Logic-Analyzer-Messung
        der RJ12-Pins, alternativ Ersatzgerät mit zugänglichem
@@ -636,7 +646,8 @@ P-SW17 | JK-BMS CAN-BUS-ALTERNATIVE (bmscan.h/.cpp)  [NEU v5.1]
                      (bms.cpp aus dem Build nehmen, sonst doppelte
                      Symbole für g_bms/bms_init/etc.)
   Pin-Wiederverwendung: CAN-Transceiver (z. B. SN65HVD230, 3,3V) an
-  denselben Pins wie MAX485 (GPIO 16/17), Override in config.h möglich.
+  denselben Pins wie die UART-TTL-Direktverbindung (GPIO 16/17),
+  Override in config.h möglich.
 
 P-SW18 | RGB-LED RUNDLAUF-ENCODING (io.h/.cpp, logic.cpp)  [NEU v5.1]
   Ersetzt das bisherige einfache Status-Schema (v5.0: GPIO 48 nur als

@@ -9,7 +9,7 @@ Eigenentwickeltes Energiemanagement-System für ein Wohnmobil, basierend auf ein
 | Komponente | Modell | Anbindung |
 |---|---|---|
 | MCU | ESP32-S3 DevKitC-1 N16R8 (16MB Flash, 8MB PSRAM) | — |
-| BMS | JK B2A8S20P, 4S LFP 280Ah | RS485 (UART1) — optional CAN |
+| BMS | JK B2A8S20P, 4S LFP 280Ah | UART-TTL direkt am GPS-Port (UART1) — optional CAN |
 | MPPT-Laderegler | Victron MPPT 100/30 | VE.Direct, bidirektional (UART2) |
 | RTC | DS3231 | I2C |
 | Speicher | SD-Karte 16GB FAT32 | SPI |
@@ -31,7 +31,7 @@ Die vollständige GPIO-Belegung steht in `src/config.h` (P-SW03 im Lastenheft).
 - **Temperaturkompensiertes Laden**: BMS-Zelltemperatur wird per VE.Direct-HEX an den MPPT gesendet
 - **Zweistufiger Watchdog** (Hardware + Software) mit Fail-Safe-GPIO-Zuständen
 - **RGB-Status-LED** zeigt BMS-/MPPT-Fehler, SoC, Landstrom und alle Aktoren gleichzeitig in einem Rundlauf-Muster an
-- **JK-BMS-Anbindung wahlweise über RS485 oder CAN** (Compile-Zeit-Umschaltung, identischer Datenoutput)
+- **JK-BMS-Anbindung wahlweise über UART-TTL (GPS-Port) oder CAN** (Compile-Zeit-Umschaltung, identischer Datenoutput)
 
 Die vollständige, nummerierte Anforderungsliste steht in [`Software_Lasten_Pflichtenheft.txt`](./Software_Lasten_Pflichtenheft.txt).
 
@@ -108,7 +108,7 @@ Details siehe Lastenheft, Abschnitt P-SW17.
 
 **Läuft bereits:** WLAN-AP, Webserver/Dashboard, LittleFS, SD-Karten-Logging, DS3231-RTC, RGB-Status-LED.
 
-**Aktueller Hardware-Meilenstein:** Physische RS485-Verkabelung zwischen MAX485-Modul und JK-BMS (3-Pin A/B/GND am CAN/RS485-Port). Bis dahin ist ein Red-Blink-Fehler am BMS-Kanal erwartetes Verhalten.
+**Aktueller Hardware-Meilenstein:** JK-BMS-Anbindung umgestellt von RS485 (3-Pin JST-GH-Stecker nicht beschaffbar) auf direkte UART-TTL-Verdrahtung am GPS-Port (4-Pin, vorhandener Steckertyp) — kein MAX485 mehr nötig. Pinpegel am Gerät verifiziert (Pin 2/3 ~2,5V, kein VBAT). Offen: erste Kommunikationsverifikation; FW V11.287H liegt im Bereich, in dem manche Geräte über den GPS-Port keine Antwort mehr liefern — Fallback wäre die CAN-Variante (bmscan.cpp) oder eine MAX485-Doppelbrücke.
 
 **Geplant (Phase 2):**
 - Edecoa-Wechselrichter-Integration (wartet auf Hardware mit zugänglichem RS485/Modbus- oder EG8010-Interface)

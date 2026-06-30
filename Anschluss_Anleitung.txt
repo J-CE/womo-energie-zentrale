@@ -4,7 +4,8 @@
 ║   Basis: Pflichtenheft v5.1 + config.h                           ║
 ║   Stand: Hardware-Entscheidungen eingearbeitet —                 ║
 ║     • D+ und Gel-Lader über 2× Joy-it COM-MOSFET (IRF9540N)      ║
-║     • RS485-Modul mit Auto-DE/RE (GPIO 15 frei)                  ║
+║     • JK-BMS direkt per UART-TTL am GPS-Port (kein MAX485        ║
+║       mehr für das BMS, GPIO 15 frei)                            ║
 ║     • Gel-Lader-Strombegrenzung über 1Ω/10W-Drahtwiderstand     ║
 ║     • Sperrdioden (SR560) gegen Rückströme an D+ und Gel-Lader   ║
 ║     • Sicherungen: D+ 1A, Gel-Lader 3A                          ║
@@ -15,7 +16,8 @@ WICHTIG — VOR DEM VERDRAHTEN LESEN
 ──────────────────────────────────────────────────────────────────
 • Der ESP32-S3 ist NICHT 5V-tolerant (max. ~3,6V je GPIO). Betrifft
   hier noch die VE.Direct-RX-Leitung → Spannungsteiler Pflicht
-  (Modul 3). Die MAX485-RO-Leitung ist laut Aufbau unkritisch.
+  (Modul 3). Die BMS-GPS-Port-TTL-Pegel wurden mit ~2,5V gemessen
+  (Modul 2) — unkritisch für den ESP32, kein Teiler nötig.
 • Alle Massen (Buck-GND, ESP-GND, BMS-GND, MPPT-GND, Aktor-GND)
   auf EINEN gemeinsamen Sternpunkt. Ohne gemeinsame Masse keine
   serielle Kommunikation und kein definierter MOSFET-Gate-Pegel.
@@ -49,33 +51,65 @@ Monitor/Flash: USB-C (CDC, 115200 Baud).
 Gesperrte Pins NICHT belegen: 0,3,19,20,26–37,45,46.
 
 ──────────────────────────────────────────────────────────────────
-MODUL 2 — JK-BMS über MAX485 (RS485, UART1, AUTO-DE/RE)
+MODUL 2 — JK-BMS direkt per UART-TTL (GPS-Port, UART1, OHNE MAX485)
 ──────────────────────────────────────────────────────────────────
-Baustein: MAX485-Modul MIT automatischer Richtungsumschaltung.
-→ KEINE DE/RE-Steuerleitung nötig, GPIO 15 bleibt frei.
-ESP  →  MAX485:
-  GPIO 17 (UART1 TX)   →  DI
-  GPIO 16 (UART1 RX)   →  RO
-  VCC  →  5V   (Modul 5V-tauglich, RO-Pegel laut Aufbau ok)
-  GND  →  Sternpunkt
-  (DE/RE schaltet das Modul selbst — nicht verdrahten.)
-MAX485  →  JK-BMS:
-  A → BMS A | B → BMS B | GND → BMS GND
-  WICHTIG: Am JK-BMS-Gehäuse gibt es ZWEI Ports — diese 3-polige
-  differenzielle A/B/GND-Buchse ist der CAN/RS485-Port. NICHT den
-  GPS-Port verwenden (führt TTL-UART/VBAT, keine RS485-Pegel).
-  GND vor dem Anschließen mit Multimeter gegen Sternpunkt prüfen.
-  Im BMS-Menü das Protokoll auf "RS485 Modbus" stellen.
-Parameter: 115200 Baud, 8N1. Query-Frame alle 2000ms.
-HINWEIS Auto-Direction-Timing: bei 115200 beim Erstbetrieb prüfen,
-  ob die ERSTEN Antwortbytes vollständig ankommen (BMS_DEBUG_RAW=1).
-  Fehlende Anfangsbytes → Modul mit echtem Auto-Dir-Chip (MAX13487).
-FIRMWARE: manuelles DE/RE-Toggle in bms.cpp wird No-Op (GPIO 15).
-  Belassbar als Fallback oder entfernen.
-ALTERNATIVE (Compile-Zeit, optional): Statt RS485 kann das BMS auch
-  über CAN angebunden werden (bmscan.cpp, Pflichtenheft P-SW17).
-  Dann sitzt an GPIO 16/17 statt MAX485 ein CAN-Transceiver
-  (z. B. SN65HVD230, 3,3V) — Modul 2 entfällt dann komplett.
+HINTERGRUND: Der CAN/RS485-Port (3-Pin, JST GH 1,25mm) war nicht zu
+  beschaffen. Der GPS-Port (4-Pin, anderer JST-Typ, vorhanden) führt
+  laut JK-Doku/Community dasselbe UART-Signal direkt als TTL, OHNE
+  RS485-Differenzpegel — ein MAX485-Wandler ist hier NICHT nötig und
+  würde nur unnötige Komplexität (zwei Module nötig) hinzufügen.
+  Diese Konstruktion (vorher für den 3-Pin-Port geplant) ist damit
+  hinfällig: KEIN MAX485 mehr im BMS-Pfad.
+
+JK-BMS GPS-Port-Pinbelegung (4-Pin, Standard-Reihenfolge):
+  Pin 1 = GND | Pin 2 = RX | Pin 3 = TX | Pin 4 = VBAT
+  Pin 4 (VBAT) führt die VOLLE Pack-Spannung (4S LFP: bis ~14,6V!) —
+  NIEMALS anschließen, auch nicht testweise.
+  AM GERÄT VERIFIZIERT (Multimeter): Pin 2 und Pin 3 zeigen ~2,5V
+  (Signalpegel, NICHT VBAT) — Standard-Pinbelegung bestätigt, KEINE
+  Spiegelung bei diesem Exemplar.
+
+DIREKTVERDRAHTUNG (kein Pegelwandler, kein Spannungsteiler):
+  BMS Pin 1 (GND) → Sternpunkt
+  BMS Pin 2/3 (RX/TX) → ESP32 GPIO 17 / GPIO 16
+  BMS Pin 4 (VBAT) → NICHT ANSCHLIESSEN, isoliert lassen
+
+  WICHTIG: Welcher der beiden Pins (2 oder 3) tatsächlich RX bzw. TX
+  ist, ergibt sich erst beim ersten Funktionstest. Reihenfolge:
+    BMS-TX → ESP32 GPIO 16 (UART1 RX)
+    BMS-RX → ESP32 GPIO 17 (UART1 TX)
+  Kommt nach dem Flashen keine Antwort (BMS_DEBUG_RAW=1 zeigt nichts
+  oder nur Müll): Pin 2/3 auf der ESP-Seite EINFACH TAUSCHEN — das
+  ist der häufigste erste Fehler bei dieser Verbindungsart und
+  zerstört nichts (TTL-Pegel auf beiden Seiten).
+
+  Im BMS-Menü das Protokoll auf "RS485 Modbus" stellen (gilt
+  unabhängig vom physischen Port — steuert das Antwortformat).
+
+FIRMWARE-RISIKO (bekannt, vor Inbetriebnahme prüfen):
+  Community-Berichte deuten darauf hin, dass die direkte UART-TTL-
+  Antwort über den GPS-Port bei JK-Firmware ab ca. V11.28 nicht mehr
+  zuverlässig funktioniert. Unser Gerät läuft auf FW V11.287H — exakt
+  im kritischen Bereich. Kann funktionieren, ist aber NICHT
+  garantiert. Sofort nach dem ersten Anschluss mit BMS_DEBUG_RAW=1
+  prüfen, ob überhaupt Frames ankommen. Falls dauerhaft keine Antwort:
+  Fallback auf bmscan.cpp (CAN, siehe ALTERNATIVE unten) oder
+  Zweier-MAX485-Brücke (TTL→RS485→TTL) zwischen GPS-Port und ESP32.
+
+KEIN ÄNDERUNGSBEDARF IN DER FIRMWARE: GPIO 16/17, Baudrate (115200,
+  8N1) und Protokoll-Frame (4E-57) sind identisch zur ursprünglich
+  geplanten RS485-Verbindung — bms.cpp bleibt unverändert. Das
+  DE/RE-Toggle auf GPIO 15 in bms.cpp bleibt (No-Op, da GPIO 15
+  weiterhin unbeschaltet ist).
+
+DIE BEREITS VERBAUTEN ZWEI MAX485-MODULE WERDEN FÜR DAS BMS NICHT
+  GENUTZT — als Spare/Option für eine spätere RS485-Verlängerung
+  belassbar, aber nicht verdrahtet.
+
+ALTERNATIVE (Compile-Zeit, optional): Statt UART/RS485 kann das BMS
+  auch über CAN angebunden werden (bmscan.cpp, Pflichtenheft P-SW17).
+  Dann sitzt an GPIO 16/17 ein CAN-Transceiver (z. B. SN65HVD230,
+  3,3V) statt der Direktverdrahtung zum GPS-Port.
 
 ──────────────────────────────────────────────────────────────────
 MODUL 3 — Victron MPPT über VE.Direct (UART2, RX + TX)
@@ -214,9 +248,9 @@ GPIO-GESAMTTABELLE
   GPIO 12   SPI CLK    SD-Karte
   GPIO 13   SPI MOSI   SD-Karte
   GPIO 14   SPI MISO   SD-Karte
-  GPIO 15   FREI       (RS485 Auto-DE/RE — nicht belegt)
-  GPIO 16   UART1 RX   JK-BMS (von MAX485 RO)
-  GPIO 17   UART1 TX   JK-BMS (zu MAX485 DI)
+  GPIO 15   FREI       (kein MAX485 mehr — nicht belegt)
+  GPIO 16   UART1 RX   JK-BMS TX (direkt vom GPS-Port, TTL ~2,5V)
+  GPIO 17   UART1 TX   JK-BMS RX (direkt zum GPS-Port, TTL)
   GPIO 18   INPUT      Landstrom-Sensor (Teiler 2k/1,5k, HIGH=Netz)
   GPIO 21   OUTPUT     D+ COM-MOSFET Kühlschrank   [Active-HIGH] *geändert
   GPIO 38   UART2 RX   VE.Direct MPPT (Teiler 1k/2k)
@@ -234,7 +268,7 @@ NÖTIGE config.h-ÄNDERUNGEN
   // D+ über Joy-it COM-MOSFET (P-Kanal, High-Side, Active-HIGH):
   #define RELAY_D_PLUS_ACTIVE        HIGH        // war LOW
 
-  // RS485-Modul mit Auto-DE/RE → GPIO 15 entfällt:
+  // Kein MAX485 mehr (BMS direkt am GPS-Port) → GPIO 15 entfällt:
   // #define GPIO_RS485_DE_RE        15          // ungenutzt, GPIO 15 frei
 
   // Gel-Lader bleibt Active-HIGH (GPIO 39) — KEINE Änderung.
@@ -253,9 +287,13 @@ PRÜF-CHECKLISTE VOR ERSTINBETRIEBNAHME
 [ ] Wandler liefert 5,0–5,1V (gemessen, OHNE ESP)
 [ ] Verpolschutz (SR560) + Haupt-Sicherung im 12V-Pfad
 [ ] Gemeinsame Masse (Sternpunkt) für ALLE Module
-[ ] MAX485: Auto-DE/RE, GPIO 15 NICHT verdrahtet
-[ ] BMS-RS485: richtigen Port (CAN/RS485, NICHT GPS) verwendet,
-    GND mit Multimeter geprüft, BMS-Menü auf "RS485 Modbus" gestellt
+[ ] BMS: GPS-Port direkt verdrahtet (KEIN MAX485), GND mit Multimeter
+    gegen Sternpunkt geprüft, VBAT-Pin (Pin 4) NICHT angeschlossen
+[ ] BMS-Pegel Pin 2/3 mit Multimeter geprüft (~2,5V, kein VBAT-Level),
+    BMS-Menü auf Protokoll "RS485 Modbus" gestellt
+[ ] BMS_DEBUG_RAW=1: erste Antwort-Frames verifiziert (FW V11.287H —
+    bekanntes Risiko fehlender Antwort über GPS-Port bei dieser FW),
+    bei Stille TX/RX (Pin 2/3) tauschen
 [ ] VE.Direct-RX-Teiler 1kΩ+2kΩ, +Vcc NICHT verbunden
 [ ] VE.Direct-TX (GPIO 42) direkt, VictronConnect "VE.Direct"
 [ ] config.h: RELAY_D_PLUS_ACTIVE = HIGH
@@ -267,6 +305,5 @@ PRÜF-CHECKLISTE VOR ERSTINBETRIEBNAHME
 [ ] WR-Remote: zweiter Optokoppler + 330Ω
 [ ] Status-LED + Vorwiderstand | SD-Karte FAT32
 [ ] Erststart: Module EINZELN zuschalten, im Monitor verifizieren
-[ ] BMS_DEBUG_RAW=1: Frame-Verifikation + Auto-DE/RE-Turnaround
 ══════════════════════════════════════════════════════════════════
 Ende — Basis Pflichtenheft v5.1 + Hardware-Entscheidungen
