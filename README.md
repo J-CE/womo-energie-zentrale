@@ -1,4 +1,4 @@
-# Womo Energy Core v5.1
+# Womo Energy Core v5.3
 
 Eigenentwickeltes Energiemanagement-System für ein Wohnmobil, basierend auf einem ESP32-S3. Überwacht BMS und MPPT-Laderegler, steuert Verbraucher/Lader automatisch nach Ladezustand und Solarleistung, loggt historische Daten und liefert ein komplett offline-fähiges Web-Dashboard.
 
@@ -15,8 +15,8 @@ Eigenentwickeltes Energiemanagement-System für ein Wohnmobil, basierend auf ein
 | Speicher | SD-Karte 16GB FAT32 | SPI |
 | Kühlschrank (D+) | Joy-it COM-MOSFET (IRF9540N) | GPIO, High-Side |
 | Starterbatterie-Lader | Joy-it COM-MOSFET (IRF9540N) | GPIO, High-Side |
-| Wechselrichter-Fernsteuerung | PC817-Optokoppler | GPIO |
-| Landstrom-Erkennung | PC817-Optokoppler | GPIO, Input |
+| Wechselrichter | Renogy 12V/2000W mit NVS (Netzvorrangschaltung) | Fernbedienungsport: Power-/Alarm-LED als GPIO-Eingang, Schalterkontakt als GPIO-Ausgang (Optokoppler) |
+| Landstrom-Erkennung | Spannungsteiler 2k/1,5k von 5V | GPIO, Input |
 | Status | On-board WS2812 RGB-LED + externe Status-LED | GPIO |
 
 Die vollständige GPIO-Belegung steht in `src/config.h` (P-SW03 im Lastenheft).
@@ -47,7 +47,7 @@ Die vollständige, nummerierte Anforderungsliste steht in [`Software_Lasten_Pfli
 │   ├── bms.h / .cpp        # JK-BMS RS485-Parser
 │   ├── bmscan.h / .cpp     # JK-BMS CAN-Parser (Alternative zu bms.cpp)
 │   ├── mppt.h / .cpp       # VE.Direct Text-Parser + HEX-TX
-│   ├── inverter.h / .cpp   # Wechselrichter-Sniffer (Stub, Phase 2)
+│   ├── inverter.h / .cpp   # Wechselrichter-Status (Renogy NVS, 2 LED-Eingänge)
 │   ├── io.h / .cpp         # GPIO-Aktoren, Landstrom-Sensor, RGB-LED
 │   ├── logic.h / .cpp      # Schaltlogik
 │   ├── logger.h / .cpp     # PSRAM-Ringpuffer + SD-Logging
@@ -111,7 +111,7 @@ Details siehe Lastenheft, Abschnitt P-SW17.
 **Aktueller Hardware-Meilenstein:** JK-BMS-Anbindung umgestellt von RS485 (3-Pin JST-GH-Stecker nicht beschaffbar) auf direkte UART-TTL-Verdrahtung am GPS-Port (4-Pin, vorhandener Steckertyp) — kein MAX485 mehr nötig. Pinpegel am Gerät verifiziert (Pin 2/3 ~2,5V, kein VBAT). Offen: erste Kommunikationsverifikation; FW V11.287H liegt im Bereich, in dem manche Geräte über den GPS-Port keine Antwort mehr liefern — Fallback wäre die CAN-Variante (bmscan.cpp) oder eine MAX485-Doppelbrücke.
 
 **Geplant (Phase 2):**
-- Edecoa-Wechselrichter-Integration (wartet auf Hardware mit zugänglichem RS485/Modbus- oder EG8010-Interface)
+- Renogy-Wechselrichter: Status-Eingänge (Power/Alarm) eingebaut — Pinbelegung/Spannungsteiler noch am realen Gerät zu verifizieren
 - Remote-Telemetrie (SIM7080G oder Walter-Board, MQTT über TLS)
 - Eigene Delphi-FireMonkey-App (Android/Windows)
 

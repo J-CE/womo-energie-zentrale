@@ -1,11 +1,13 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║   ANSCHLUSS-ANLEITUNG — WOMO ENERGY CORE / GODMODULE              ║
 ║   Sensoren & Aktoren, Modul für Modul                            ║
-║   Basis: Pflichtenheft v5.1 + config.h                           ║
+║   Basis: Pflichtenheft v5.3 + config.h                           ║
 ║   Stand: Hardware-Entscheidungen eingearbeitet —                 ║
 ║     • D+ und Gel-Lader über 2× Joy-it COM-MOSFET (IRF9540N)      ║
 ║     • JK-BMS direkt per UART-TTL am GPS-Port (kein MAX485        ║
 ║       mehr für das BMS, GPIO 15 frei)                            ║
+║     • Renogy 12V/2000W Wechselrichter mit NVS — 2 Status-        ║
+║       Eingänge (Power-/Alarm-LED) über Spannungsteiler GPIO 4/5  ║
 ║     • Gel-Lader-Strombegrenzung über 1Ω/10W-Drahtwiderstand     ║
 ║     • Sperrdioden (SR560) gegen Rückströme an D+ und Gel-Lader   ║
 ║     • Sicherungen: D+ 1A, Gel-Lader 3A                          ║
@@ -210,9 +212,43 @@ MODUL 8 — Wechselrichter-Remote (Optokoppler-Ausgang) [Active-HIGH]
 ──────────────────────────────────────────────────────────────────
 Ansteuerung: GPIO 40, ACTIVE-HIGH. Potenzialfreier Schaltkontakt.
   ESP-Seite:  GPIO 40 ─[ ~330Ω ]─ PC817 Anode | PC817 Kathode → GND
-  WR-Seite:   PC817 Kollektor → WR-Remote (+) | Emitter → WR-Remote-GND
+  WR-Seite:   PC817 Kollektor → Renogy-Fernbedienungsport, Schalter-
+              kontakt-Pin (Brücke zu GND/Common aktiviert REM-Modus)
 HINWEIS: eigener PC817 nur für diesen Ausgang (Modul 4 ist jetzt ein
   Spannungsteiler, kein Optokoppler mehr). Bare PC817 + 330Ω genügt.
+ACHTUNG: Schalterkontakt-Pin am Renogy-Fernbedienungsport (RJ11/RJ12)
+  variiert je Modell/Charge laut Forenberichten — vor Anschluss mit
+  Multimeter identifizieren (welche 2 Pins beim Brücken den
+  Hauptschalter in REM-Stellung das Gerät einschalten).
+
+──────────────────────────────────────────────────────────────────
+MODUL 8b — Wechselrichter-Status (2× LED-Spannungsteiler) [EINGANG]
+──────────────────────────────────────────────────────────────────
+Liest die Power- (grün) und Alarm-LED (rot) des Renogy-Fernbedienungs-
+ports als rohe Spannungspegel — KEIN Datenprotokoll, nur Schalter+LED.
+  GPIO 4 ← Spannungsteiler ← Power-LED-Pin (Renogy-Fernbedienungsport)
+  GPIO 5 ← Spannungsteiler ← Alarm-LED-Pin (Renogy-Fernbedienungsport)
+NOCH OFFEN — vor Verkabelung am realen Gerät zu klären:
+  1. Welche 2 der RJ11/RJ12-Pins sind Power-LED bzw. Alarm-LED
+     (Pinout uneinheitlich, siehe MODUL 8)
+  2. Spannung in beiden Zuständen messen (LED aus / LED an) —
+     Forenwert für ein anderes Modell war ~3,8V bei LED an, das ist
+     bereits über dem ESP32-S3-GPIO-Grenzwert (~3,6V) und MUSS auf
+     einen sicheren Pegel heruntergeteilt werden
+  3. Quellimpedanz beachten: LED-Ausgänge sind stromschwach
+     (wenige mA) — Teiler hochohmig wählen (z. B. ≥100kΩ Gesamt-
+     widerstand), damit die Strombelastung die LED-Anzeige am
+     Gerät selbst nicht beeinflusst
+  4. Nach Messung: Teilerverhältnis in config.h dokumentieren,
+     WR_LED_ACTIVE ggf. auf LOW ändern falls Pegel invertiert
+GALVANISCHE TRENNUNG: Hier bewusst Spannungsteiler statt Optokoppler
+  (wie bei Modul 4 Landstrom) — ein Optokoppler würde zusätzlichen
+  Strom aus der LED-Leitung ziehen und könnte deren eigene Anzeige
+  am Gerät verfälschen oder den Schwellwert verschieben.
+SOFTWARE: 2 debounced Status-Eingänge (inverter.cpp), dreistufige
+  LED im Dashboard-System-Tab (grau=ungültig, grün=ein, rot=Alarm).
+  AC-Ausgangsleistung/-Spannung sind mit dieser Hardware grundsätzlich
+  NICHT verfügbar (kein Datenprotokoll am Gerät vorhanden).
 
 ──────────────────────────────────────────────────────────────────
 MODUL 9 — Status-LED (einfache LED)  [Active-HIGH]
@@ -244,6 +280,8 @@ GPIO-GESAMTTABELLE
 ══════════════════════════════════════════════════════════════════
   GPIO  1   I2C SDA    DS3231 (bestückt, produktiv)
   GPIO  2   I2C SCL    DS3231 (bestückt, produktiv)
+  GPIO  4   INPUT      WR-Status Power-LED (Renogy NVS, Teiler) *neu
+  GPIO  5   INPUT      WR-Status Alarm-LED (Renogy NVS, Teiler) *neu
   GPIO 11   SPI CS     SD-Karte
   GPIO 12   SPI CLK    SD-Karte
   GPIO 13   SPI MOSI   SD-Karte
@@ -260,7 +298,7 @@ GPIO-GESAMTTABELLE
   GPIO 42   UART2 TX   VE.Direct MPPT HEX (direkt)
   GPIO 48   OUTPUT     On-board RGB-LED (WS2812)
   GESPERRT: 0,3,19,20,26–37,45,46
-  FREI/ADC: 4–10 (analog), 15 (digital)
+  FREI/ADC: 6–10 (analog), 15 (digital)
 
 ══════════════════════════════════════════════════════════════════
 NÖTIGE config.h-ÄNDERUNGEN
@@ -303,7 +341,11 @@ PRÜF-CHECKLISTE VOR ERSTINBETRIEBNAHME
 [ ] SR560-Orientierung an beiden Pfaden geprüft (Ring = Kathode)
 [ ] COM-MOSFETs: SIG=low → AUS (Fail-Safe geprüft)
 [ ] WR-Remote: zweiter Optokoppler + 330Ω
+[ ] WR-Status-Eingänge (GPIO 4/5): Pinbelegung am Renogy-Fernbedienungs-
+    port mit Multimeter identifiziert (Power-/Alarm-LED), Spannungs-
+    pegel in beiden Zuständen gemessen, Teiler ≥100kΩ dimensioniert,
+    WR_LED_ACTIVE in config.h ggf. angepasst
 [ ] Status-LED + Vorwiderstand | SD-Karte FAT32
 [ ] Erststart: Module EINZELN zuschalten, im Monitor verifizieren
 ══════════════════════════════════════════════════════════════════
-Ende — Basis Pflichtenheft v5.1 + Hardware-Entscheidungen
+Ende — Basis Pflichtenheft v5.3 + Hardware-Entscheidungen

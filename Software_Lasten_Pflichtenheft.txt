@@ -1,8 +1,9 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║     LASTEN- UND PFLICHTENHEFT — SOFTWARE                        ║
-║     Womo Energy Core v5.1                                        ║
+║     Womo Energy Core v5.3                                        ║
 ║     Stand: DS3231-RTC produktiv + CAN-BMS-Alternative +          ║
-║            RGB-Rundlauf-Encoding + Hardware-Inbetriebnahme      ║
+║            RGB-Rundlauf-Encoding + Renogy-NVS-Wechselrichter +  ║
+║            Landstrom-Spannungsteiler + BMS direkt am GPS-Port   ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -71,21 +72,27 @@ L-SW04 | SCHALTLOGIK GEL-LADER (STARTERBATTERIE)  [GEÄNDERT][MUSS]
   Gleichzeitiger Betrieb mit D+-Relais möglich und gewollt.
   Kein Landstrom-Check (Gel-Lader unabhängig vom Netzstrom).
 
-L-SW05 | SCHALTLOGIK WECHSELRICHTER REMOTE  [GEÄNDERT]     [SOLLTE]
-  EIN  wenn: SoC >= socWROn UND kein Landstrom
+L-SW05 | SCHALTLOGIK WECHSELRICHTER REMOTE  [GEÄNDERT v5.3] [SOLLTE]
+  EIN  wenn: SoC >= socWROn
              UND BMS-Daten gültig UND nicht veraltet (> 60s)
   HALT wenn: bereits EIN, keine AUS-Bedingung erfüllt
-  AUS  wenn: (hart) Landstrom ODER BMS ungültig/veraltet
+  AUS  wenn: (hart) BMS ungültig/veraltet
              (weich) SoC < socWROff
   Keine PV-Bedingung — WR-Schaltung ausschließlich SoC-basiert.
   Schwellwerte (socWROn/Off) unabhängig von D+ konfigurierbar.
   Default: 95/80% SoC. Flatter-Schutz: 10 Zyklen.
+  v5.3: Landstrom-Bedingung entfernt. Hardwarewechsel von Edecoa
+  (ohne NVS) auf Renogy 12V/2000W MIT eingebauter Netzvorrang-
+  schaltung (NVS) — das Gerät übernimmt die AC-seitige Umschaltung
+  Landstrom/Inverter selbst, ein hartes Abschalten der Fernsteuerung
+  bei Landstrom ist bei diesem Gerät funktional nicht nötig.
 
 L-SW06 | LANDSTROM-ERKENNUNG                               [MUSS]
-  Hardware-Signal (PC817-Optokoppler an MeanWell HDR-15-5) wird als
-  GPIO-Pin eingelesen. HIGH = Landstrom vorhanden. Das Signal liegt
-  in Sektor A (vor NVS), ist damit immun gegen WR-Einspeisung.
-  Bei Landstrom werden D+-Relais und WR-Remote sofort deaktiviert.
+  Hardware-Signal (Spannungsteiler 2k/1,5k an 5V-Rail) wird als
+  GPIO-Pin eingelesen. HIGH = Landstrom vorhanden.
+  Bei Landstrom wird das D+-Relais sofort deaktiviert. Die
+  WR-Remote-Logik (L-SW05) ist seit v5.3 unabhängig von Landstrom
+  (Renogy-NVS übernimmt die AC-Umschaltung selbst).
 
 L-SW07 | FAIL-SAFE / WATCHDOG                              [MUSS]
   Zweistufiges Watchdog-Konzept:
@@ -169,11 +176,16 @@ L-SW16 | AUTARKIE                                          [MUSS]
   Dienste, keine Cloud-Abhängigkeiten. Dauerbetrieb im Fahrzeug
   ohne Netzwerkverbindung nach außen.
 
-L-SW17 | WR-SNIFFER (EDECOA RJ12)                         [KANN]
-  Niedrigste Priorität. Protokoll noch unbekannt — Multimeter-
-  Messung am RJ12-Port des Edecoa ausstehend. Modul als Stub
-  implementiert, wird nach Protokollidentifikation befüllt.
-  Ziel: AC-Ausgangsleistung, Spannung, Status des Wechselrichters.
+L-SW17 | WR-STATUS (RENOGY NVS, LED-EINGÄNGE)   [GEÄNDERT v5.3] [KANN]
+  Hardwarewechsel: Edecoa (RJ12-Protokoll-Sniffer, nie über Stub
+  hinaus implementiert) ersetzt durch Renogy 12V/2000W mit NVS.
+  Kein Datenprotokoll am Fernbedienungsport vorhanden — nur zwei
+  rohe LED-Spannungspegel (Power/grün, Alarm/rot) + Schalterkontakt.
+  Implementiert: 2 digitale Status-Eingänge (debounced), GPIO 4/5
+  über Spannungsteiler. AC-Ausgangsleistung/-Spannung NICHT
+  verfügbar (Hardware-Limitierung, kein Stub mehr — endgültig).
+  Pinbelegung/Spannungsteiler-Dimensionierung: Multimeter-Messung
+  am realen Gerät noch ausstehend (s. Anschluss_Anleitung MODUL 8b).
 
 L-SW18 | DELPHI FIREMONKEY APP (PHASE 2)                  [SOLLTE]
   Eigene Android/Windows-App in Delphi 11 Alexandria (FireMonkey).
@@ -281,7 +293,7 @@ P-SW02 | PROJEKTSTRUKTUR (QUELLDATEIEN)  [GEÄNDERT v5.1]
   src/bmscan.h/.cpp     JK-BMS CAN-Parser — Compile-Zeit-Alternative
                         zu bms.cpp, identischer JSON-Output (v5.1, neu)
   src/mppt.h/.cpp       VE.Direct Text-Parser + HEX-TX Temperatur
-  src/inverter.h/.cpp   WR-Sniffer Stub (RJ12, Protokoll offen)
+  src/inverter.h/.cpp   WR-Status Renogy NVS (2 LED-Eingänge, debounced)
   src/io.h/.cpp         GPIO-Init, Aktoren, Landstrom-Sensor,
                         RGB-LED-Rundlauf-Task (v5.1)
   src/logic.h/.cpp      Schaltlogik (Hysterese, MA, Recovery, Min-on),
@@ -295,11 +307,13 @@ P-SW02 | PROJEKTSTRUKTUR (QUELLDATEIEN)  [GEÄNDERT v5.1]
   partitions_16mb.csv   Partitionstabelle (kein OTA)
   platformio.ini        Build-Konfiguration (gepinnte Abhängigkeiten)
 
-P-SW03 | GPIO-BELEGUNG (FINAL, ESP32-S3 N16R8)  [GEÄNDERT v5.1]
+P-SW03 | GPIO-BELEGUNG (FINAL, ESP32-S3 N16R8)  [GEÄNDERT v5.3]
   GPIO  1   → I2C SDA   DS3231 RTC (bestückt, produktiv seit v5.1)
   GPIO  2   → I2C SCL   DS3231 RTC (bestückt, produktiv seit v5.1)
-  GPIO  4   → frei (ADC1, für analoge Erweiterungen)
-  GPIO  5   → frei (ADC1, für analoge Erweiterungen)
+  GPIO  4   → INPUT     WR-Status Power-LED (Renogy NVS, Spannungsteiler,
+              Pinbelegung/Dimensionierung am Gerät noch zu verifizieren)
+  GPIO  5   → INPUT     WR-Status Alarm-LED (Renogy NVS, Spannungsteiler,
+              s.o.)
   GPIO  6–10→ frei (ADC1, für analoge Erweiterungen)
   GPIO 11   → SPI CS    SD-Karte
   GPIO 12   → SPI CLK   SD-Karte
@@ -308,7 +322,8 @@ P-SW03 | GPIO-BELEGUNG (FINAL, ESP32-S3 N16R8)  [GEÄNDERT v5.1]
   GPIO 15   → frei       kein MAX485 mehr (JK-BMS direkt am GPS-Port)
   GPIO 16   → UART1 RX  JK-BMS direkt vom GPS-Port (TTL) / CAN RX (alt.)
   GPIO 17   → UART1 TX  JK-BMS direkt zum GPS-Port (TTL) / CAN TX (alt.)
-  GPIO 18   → INPUT     Landstrom-Sensor (Optokoppler, PULLUP)
+  GPIO 18   → INPUT     Landstrom-Sensor (Spannungsteiler 2k/1,5k,
+              KEIN Pull-up, HIGH = Landstrom)
   GPIO 21   → OUTPUT    D+-Relais Kühlschrank (Active-LOW)
   GPIO 38   → UART2 RX  VE.Direct MPPT Text-Protokoll (RX-only Pfad)
   GPIO 39   → OUTPUT    Starter-Lader MOSFET (Active-HIGH)
@@ -322,7 +337,7 @@ P-SW03 | GPIO-BELEGUNG (FINAL, ESP32-S3 N16R8)  [GEÄNDERT v5.1]
               3,3V Pegel — MPPT VE.Direct-Eingang ist 3,3V-kompatibel,
               kein Pegelwandler für TX-Richtung erforderlich.
   GESPERRT: 0,3,19,20,26-37,45,46 (Strapping/Flash/USB/PSRAM)
-  RESERVIERT ANALOG: GPIO 4–10 (ADC1-sicher, für Erweiterungen)
+  RESERVIERT ANALOG: GPIO 6–10 (ADC1-sicher, für Erweiterungen)
   GPIO 16/17 bei CAN-Build (BMS_USE_CAN): statt der UART-TTL-Direkt-
     verbindung zum GPS-Port sitzt an denselben Pins ein CAN-
     Transceiver (z. B. SN65HVD230, 3,3V).
@@ -520,6 +535,10 @@ P-SW13 | DASHBOARD (data/index.html)  [GEÄNDERT]
   System-Tab:
     - 4 Aktor-Kacheln (Grund, Debounce, socHigh-Info)
     - System-Status (Puffer, SD, Frame-/Fehlerzähler, Laufzeit)
+    - Wechselrichter-Status-LED (Renogy NVS): dreistufig — aus (grau,
+      Power-LED aus), grün (Power-LED an / "Ein"), rot (Alarm-LED an,
+      Vorrang vor grün). Bei valid=false (vor erstem Poll / Mutex-
+      Timeout) LED grau + Label "–". Quelle: inv.power_on / inv.alarm.
   Einstellungen-Tab:
     - Formular für alle 12 NVS-Parameter
     - Speichern → POST /api/params, Fabrik-Reset → POST /api/reset
@@ -567,7 +586,7 @@ P-SW15 | SICHERHEITS-IMPLEMENTIERUNGEN  [GEÄNDERT]
   13. Pfad-Validierung in handle_sddata: "/" am Anfang, kein "..".
   14. POST-Body-Limit: > 2048 Byte → HTTP 413.
 
-P-SW16 | BEKANNTE OFFENE PUNKTE (SOFTWARE)  [GEÄNDERT v5.1]
+P-SW16 | BEKANNTE OFFENE PUNKTE (SOFTWARE)  [GEÄNDERT v5.3]
   ERLEDIGT SEIT v5.1:
    • RTC: DS3231 an I2C GPIO 1/2 bestückt und produktiv — führende
      Zeitquelle, übersteht Stromausfälle eigenständig (siehe L-SW19).
@@ -586,10 +605,13 @@ P-SW16 | BEKANNTE OFFENE PUNKTE (SOFTWARE)  [GEÄNDERT v5.1]
      genau in diesem Bereich. Bei Stille: TX/RX (Pin 2/3) tauschen,
      dann ggf. Fallback auf bmscan.cpp (CAN) oder MAX485-Doppel-
      brücke (TTL→RS485→TTL, beide Module bereits vorhanden).
-  2. WR-Sniffer (Edecoa): inverter.cpp bleibt Stub.
-     → Phase 2: Protokoll-Analyse nach Logic-Analyzer-Messung
-       der RJ12-Pins, alternativ Ersatzgerät mit zugänglichem
-       RS485/Modbus- oder EG8010-Interface. Kein Zeitplan.
+  2. WR-Status (Renogy NVS): 2 LED-Eingänge implementiert (v5.3),
+     GPIO 4/5 über Spannungsteiler. Pinbelegung am Fernbedienungs-
+     port und Spannungsteiler-Dimensionierung noch nicht am realen
+     Gerät verifiziert — Multimeter-Messung steht aus (Platzhalter-
+     werte in config.h, s. Anschluss_Anleitung MODUL 8b). AC-Watt/
+     Volt-Telemetrie bleibt grundsätzlich unmöglich (kein Protokoll
+     am Gerät vorhanden, anders als ursprünglich bei Edecoa erhofft).
   3. BMS-Byte-Offsets: Protokoll-Doku verifiziert (v5.0).
      Strom-Skalierung: 0.01A/Bit per Doku ✓
      0x79-Triplets: 1 Byte Index + 2 Bytes mV per Doku ✓
@@ -685,6 +707,43 @@ P-SW18 | RGB-LED RUNDLAUF-ENCODING (io.h/.cpp, logic.cpp)  [NEU v5.1]
 ÄNDERUNGSPROTOKOLL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+─── v5.1 → v5.3 ─────────────────────────────────────────────────
+
+  BMS-ANBINDUNG:
+  • Der 3-Pin-JST-GH-Stecker für den CAN/RS485-Port des BMS war
+    nicht beschaffbar. Umgestellt auf direkte UART-TTL-Verdrahtung
+    am GPS-Port (4-Pin, vorhandener Steckertyp) — KEIN MAX485 mehr
+    nötig. Pinpegel am Gerät verifiziert (Pin 2/3 ~2,5V, kein VBAT).
+    Bekanntes Restrisiko: JK-Firmware ab ca. V11.28 antwortet bei
+    manchen Geräten über den GPS-Port nicht mehr zuverlässig — unser
+    Gerät (FW V11.287H) liegt in diesem Bereich, erste Kommuni-
+    kationsverifikation steht noch aus. Fallback bei Stille:
+    bmscan.cpp (CAN) oder MAX485-Doppelbrücke. [L-SW01, P-SW03,
+    P-SW04, P-SW16]
+
+  WECHSELRICHTER:
+  • Hardwarewechsel: Edecoa (RJ12-Protokoll-Sniffer, nie über den
+    Stub hinaus implementiert) ersetzt durch Renogy 12V/2000W mit
+    eingebauter Netzvorrangschaltung (NVS). Kein Datenprotokoll am
+    Fernbedienungsport — stattdessen 2 debounced LED-Status-
+    Eingänge (Power/Alarm) über Spannungsteiler an GPIO 4/5.
+    AC-Watt/Volt-Telemetrie ist mit dieser Hardware grundsätzlich
+    nicht verfügbar. inverter.cpp ist kein Stub mehr. [L-SW17,
+    P-SW09, P-SW16]
+  • L-SW05: Landstrom-Bedingung aus der WR-Remote-Schaltlogik
+    entfernt — das Renogy-NVS übernimmt die AC-seitige Umschaltung
+    Landstrom/Wechselrichter eigenständig, ein hartes Abschalten
+    der Fernsteuerung durch die Firmware ist bei diesem Gerät nicht
+    mehr nötig. [L-SW05, L-SW06]
+  • Dashboard System-Tab: dreistufige Wechselrichter-Status-LED
+    (grau=ungültig, grün=ein, rot=Alarm).
+
+  LANDSTROM-ERKENNUNG:
+  • Hardwarewechsel von PC817-Optokoppler (MeanWell HDR-15-5) auf
+    Spannungsteiler (2kΩ/1,5kΩ an 5V-Rail) am selben GPIO 18.
+    Logik unverändert (HIGH = Landstrom), pinMode INPUT ohne
+    Pull-up (kein PULLUP wie zuvor dokumentiert). [L-SW06, P-SW03]
+
 ─── v5.0 → v5.1 ─────────────────────────────────────────────────
 
   ZEITBASIS:
@@ -770,26 +829,37 @@ P-SW18 | RGB-LED RUNDLAUF-ENCODING (io.h/.cpp, logic.cpp)  [NEU v5.1]
     clock_set_epoch bool, 64-Bit-Zeitbasis, platformio.ini gepinnt.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-ERSTELLTE QUELLDATEIEN (Stand v5.1)
+ERSTELLTE QUELLDATEIEN (Stand v5.3)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   ✓ platformio.ini            (gepinnte Abhängigkeiten; optional
                                BMS_USE_CAN für CAN-Build, siehe P-SW17)
   ✓ partitions_16mb.csv       (kein OTA, unverändert)
-  ✓ src/config.h              (v5.1: GPIO 1/2 jetzt produktiv (DS3231),
+  ✓ src/config.h              (v5.3: GPIO 1/2 produktiv (DS3231),
                                RGB-Rundlauf-Konstanten, DEFAULT_TZ statt
-                               CLOCK_MEZ_OFFSET_SEC)
+                               CLOCK_MEZ_OFFSET_SEC, GPIO 4/5 Renogy
+                               WR-Status (GPIO_WR_LED_POWER/ALARM,
+                               WR_LED_ACTIVE), Landstrom-Sensor als
+                               Spannungsteiler statt Optokoppler)
   ✓ src/params.h   ✓ src/params.cpp   (GEÄNDERT v5.0: 12 Parameter,
                                socGelOff entfernt, *High neu, pvWR entfernt)
-  ✓ src/bms.h      ✓ src/bms.cpp      (GEÄNDERT v5.0: reduziertes JSON)
+  ✓ src/bms.h      ✓ src/bms.cpp      (GEÄNDERT v5.0: reduziertes JSON;
+                               UART-TTL direkt am GPS-Port, kein MAX485,
+                               DE/RE-Toggle GPIO 15 No-Op, siehe P-SW04)
   ✓ src/bmscan.h   ✓ src/bmscan.cpp   (NEU v5.1: CAN-Alternative zu
                                bms.cpp, identischer JSON-Output, siehe P-SW17)
   ✓ src/mppt.h     ✓ src/mppt.cpp     (GEÄNDERT v5.0: HEX-TX Temperatur,
                                GPIO 42 TX, reduzierte Felder)
-  ✓ src/inverter.h ✓ src/inverter.cpp (Stub, unverändert)
+  ✓ src/inverter.h ✓ src/inverter.cpp (GEÄNDERT v5.3: kein Stub mehr —
+                               Renogy NVS, 2 debounced LED-Status-Eingänge
+                               GPIO 4/5, g_invMutex, siehe L-SW17/P-SW09)
   ✓ src/io.h       ✓ src/io.cpp       (GEÄNDERT v5.1: RGB-Rundlauf-
-                               Encoding statt Prioritäts-Enum, siehe P-SW18)
+                               Encoding statt Prioritäts-Enum, siehe P-SW18;
+                               v5.3: Landstrom-Sensor Spannungsteiler statt
+                               Optokoppler, GPIO 18 unverändert)
   ✓ src/logic.h    ✓ src/logic.cpp    (GEÄNDERT v5.1: setzt
-                               g_rgbChannelMask statt g_rgbState)
+                               g_rgbChannelMask statt g_rgbState; v5.3:
+                               WR-Remote-Logik ohne Landstrom-Bedingung,
+                               siehe L-SW05)
   ✓ src/logger.h   ✓ src/logger.cpp   (GEÄNDERT v5.1: SD-Dateiname nach
                                UTC-Tag; SD-SPI-Hinweis ESP32-S3 siehe P-SW11)
   ✓ src/clock.h    ✓ src/clock.cpp    (GEÄNDERT v5.1: DS3231 produktiv,
@@ -798,9 +868,11 @@ ERSTELLTE QUELLDATEIEN (Stand v5.1)
   ✓ src/watchdog.h ✓ src/watchdog.cpp (unverändert)
   ✓ src/http_server.h ✓ src/http_server.cpp  (GEÄNDERT v5.1: /api/tz
                                (GET/POST), tz-Abk. im Live-JSON, ts_mez
-                               DST-korrekt; Routenreihenfolge siehe P-SW12)
+                               DST-korrekt; Routenreihenfolge siehe P-SW12;
+                               v5.3: Wechselrichter-Status-LED im System-Tab)
   ✓ src/main.cpp              (unverändert)
   ✓ data/index.html           (GEÄNDERT v5.1: Zeitzonen-Auswahl im
                                Einstellungen-Tab, dynamisches MEZ/MESZ-Label;
-                               Dashboard ohne Zellspannungen, 6 Metriken)
+                               Dashboard ohne Zellspannungen, 6 Metriken;
+                               v5.3: dreistufige WR-Status-LED im System-Tab)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
