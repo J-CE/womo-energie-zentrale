@@ -13,10 +13,14 @@
 //    GET  /api/sddata    SD-CSV-Streaming
 //    GET  /api/wifi      Heim-WLAN-Status (SSID/verbunden/IP/RSSI, ohne PW)
 //    POST /api/wifi      Heim-WLAN setzen (ssid/pass → NVS, sofort aktiv)
+//    GET  /api/level      Lagesensor-Live-Zustand (Neigung, Keile)
+//    GET  /api/levelcfg   Lagesensor-Konfiguration
+//    POST /api/levelcfg   Lagesensor-Konfiguration setzen
+//    POST /api/levelcalib Lagesensor kalibrieren (Null-Offset setzen/löschen)
 //    WS   /ws            Push alle 2s
 // ============================================================
 #pragma once
 #include <Arduino.h>
 
 void webserver_init();
-void webserver_broadcast();   
+void webserver_broadcast();

@@ -1,9 +1,10 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║     LASTEN- UND PFLICHTENHEFT — SOFTWARE                        ║
-║     Womo Energy Core v5.3                                        ║
+║     Womo Energy Core v5.4                                        ║
 ║     Stand: DS3231-RTC produktiv + CAN-BMS-Alternative +          ║
 ║            RGB-Rundlauf-Encoding + Renogy-NVS-Wechselrichter +  ║
-║            Landstrom-Spannungsteiler + BMS direkt am GPS-Port   ║
+║            Landstrom-Spannungsteiler + BMS direkt am GPS-Port + ║
+║            Lagesensor (MMA8452Q, elektronische Wasserwaage)     ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -247,6 +248,30 @@ L-SW20 | STATUS-ANZEIGE ON-BOARD RGB-LED  [NEU v5.1]       [SOLLTE]
   Start-/Bootzustand: weiß, bis die Schaltlogik erstmals ausgewertet
   wurde. Implementierungsdetails siehe P-SW18.
 
+L-SW21 | LAGESENSOR / ELEKTRONISCHE WASSERWAAGE  [NEU v5.4] [KANN]
+  Optionales Modul: misst die Fahrzeugneigung (Roll/Pitch) im
+  Stillstand über einen 3-Achs-Beschleunigungssensor (MMA8452Q) am
+  gemeinsamen I2C-Bus mit der DS3231-RTC (GPIO 1/2). Kein eigener
+  GPIO nötig — Versorgung 3,3V direkt, kein Pegelwandler.
+  Aus der gemessenen Neigung wird je Rad die nötige Keilhöhe
+  berechnet: das höchste Rad ist Referenz (Keil 0), die übrigen drei
+  werden rechnerisch auf dessen Höhe angehoben — das tiefste Rad
+  bekommt den größten Keil.
+  Konfigurierbar: Spurweite (800–3000mm), Radstand (1500–8000mm),
+  Einbaudrehung des Sensors (0/90/180/270°), Achsen-Invertierung,
+  Modul aktiv/inaktiv.
+  Kalibrierung: aktuelle Lage als "eben" (Null-Offset) speicherbar
+  und zurücksetzbar — gleicht eine nicht exakt waagerechte Sensor-
+  montage aus.
+  Dashboard-Tab "Lage": Libellen-Anzeige (SVG-Blase wandert zur
+  hohen Seite), Top-Down-Fahrzeugansicht mit Keilhöhe je Rad in cm,
+  Kalibrierungs-Schaltflächen, Konfigurationsformular.
+  Reine Komfortfunktion ohne Einfluss auf Schaltlogik oder
+  Sicherheitsfunktionen — Ausfall des Sensors hat keine Auswirkung
+  auf den restlichen Betrieb (present=false wird im Dashboard
+  angezeigt, sonst keine Reaktion).
+  Implementierungsdetails siehe P-SW19.
+
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 TEIL 2 — PFLICHTENHEFT (Wie ist die Software umgesetzt?)
@@ -307,9 +332,11 @@ P-SW02 | PROJEKTSTRUKTUR (QUELLDATEIEN)  [GEÄNDERT v5.1]
   partitions_16mb.csv   Partitionstabelle (kein OTA)
   platformio.ini        Build-Konfiguration (gepinnte Abhängigkeiten)
 
-P-SW03 | GPIO-BELEGUNG (FINAL, ESP32-S3 N16R8)  [GEÄNDERT v5.3]
-  GPIO  1   → I2C SDA   DS3231 RTC (bestückt, produktiv seit v5.1)
-  GPIO  2   → I2C SCL   DS3231 RTC (bestückt, produktiv seit v5.1)
+P-SW03 | GPIO-BELEGUNG (FINAL, ESP32-S3 N16R8)  [GEÄNDERT v5.4]
+  GPIO  1   → I2C SDA   DS3231 RTC (bestückt, produktiv seit v5.1) +
+              optional Lagesensor MMA8452Q (geteilter Bus, v5.4)
+  GPIO  2   → I2C SCL   DS3231 RTC (bestückt, produktiv seit v5.1) +
+              optional Lagesensor MMA8452Q (geteilter Bus, v5.4)
   GPIO  4   → INPUT     WR-Status Power-LED (Renogy NVS, Spannungsteiler,
               Pinbelegung/Dimensionierung am Gerät noch zu verifizieren)
   GPIO  5   → INPUT     WR-Status Alarm-LED (Renogy NVS, Spannungsteiler,
@@ -368,15 +395,23 @@ P-SW05 | FREERTOS TASK-ARCHITEKTUR
     → watchdog_kick(WDT_LOGGER) + logger_flush_sd(), alle 5s
   Core 0 | Prio 2 | ws_task     (4kB Stack)
     → webserver_broadcast() alle 2s an alle WS-Clients
+  Core 0 | Prio 1 | level_task  (4kB Stack, optional)
+    → MMA8452Q lesen (250ms = 4Hz), Neigung + Keilgeometrie
+      berechnen, Ergebnis in Cache ablegen (kein I2C in HTTP-Pfad)
   Core 0 | Prio 1 | watchdog_task  (in watchdog.cpp)
     → überwacht Modul-Timer, hängt selbst am HW-WDT (Backstop)
   Main Loop:
     → esp_task_wdt_reset() (HW-WDT, 4s) + Heap-Überwachung (< 20kB)
 
-P-SW06 | MUTEX-KONZEPT (THREAD-SICHERHEIT)
+P-SW06 | MUTEX-KONZEPT (THREAD-SICHERHEIT)  [GEÄNDERT v5.4]
   g_bmsMutex   (bms.cpp)    → schützt BMSData g_bms
   g_mpptMutex  (mppt.cpp)   → schützt MPPTData g_mppt inkl. Timeout-Flag
   g_sdMutex    (logger.cpp) → schützt ALLE SD-Operationen im Projekt
+  g_i2cMutex   (clock.h, deklariert) → koordiniert den GEMEINSAMEN
+               I2C-Bus zwischen DS3231 (clock.cpp) und optionalem
+               Lagesensor MMA8452Q (level.cpp) — beide Module greifen
+               aus verschiedenen Tasks/Cores zu, ohne Mutex wäre ein
+               I2C-Transaktions-Interleave möglich. (NEU v5.4)
   s_mutex      (logger.cpp) → schützt Ringpuffer + Minuten-Akkumulator
   s_reason_mux (logic.cpp)  → portMUX Spinlock für Reason-Strings
   logic.cpp liest g_bms/g_mppt mutex-geschützt in lokale Snapshots.
@@ -503,6 +538,10 @@ P-SW12 | WEBSERVER-ARCHITEKTUR
     GET  /api/buffer         → Ringpuffer (?offset&count&step)
     GET  /api/sdfiles        → Liste CSV-Dateien auf SD
     GET  /api/sddata         → SD-Datei lesen (?file&skip&limit)
+    GET  /api/level          → Lagesensor-Live-Zustand (JSON)
+    GET  /api/levelcfg       → Lagesensor-Konfiguration (JSON)
+    POST /api/levelcfg       → Lagesensor-Konfiguration setzen
+    POST /api/levelcalib     → Lagesensor kalibrieren {"reset":bool}
   WebSocket-Broadcast: alle 2s. ws.makeBuffer() + ref-counting.
     ws.cleanupClients() nur aus WS-Event-Handler (AsyncTCP-Thread).
   handle_buffer: logger_snapshot → PSRAM + AsyncResponseStream.
@@ -517,9 +556,9 @@ P-SW12 | WEBSERVER-ARCHITEKTUR
     registriert werden — sonst Fallthrough zu LittleFS, API-Aufrufe
     laufen ins Leere (404 statt JSON).
 
-P-SW13 | DASHBOARD (data/index.html)  [GEÄNDERT]
+P-SW13 | DASHBOARD (data/index.html)  [GEÄNDERT v5.4]
   Technologie: Reines HTML5/CSS3/JavaScript, keine externen Libraries.
-  Tabs: Live | Verlauf | System | Einstellungen
+  Tabs: Live | Verlauf | System | Lage | Einstellungen
   Kopf: Verbindungsstatus, Echtzeit-Uhr (lokale Zeitzone, DST), SD-Status,
         Puffergröße, Laufzeit. Footer zeigt aktive TZ-Abkürzung (z. B. CEST).
   Live-Tab:
@@ -539,6 +578,17 @@ P-SW13 | DASHBOARD (data/index.html)  [GEÄNDERT]
       Power-LED aus), grün (Power-LED an / "Ein"), rot (Alarm-LED an,
       Vorrang vor grün). Bei valid=false (vor erstem Poll / Mutex-
       Timeout) LED grau + Label "–". Quelle: inv.power_on / inv.alarm.
+  Lage-Tab (optional, nur sinnvoll mit verbautem MMA8452Q):
+    - Libellen-SVG: Blase wandert zur hohen Seite (Roll/Pitch-Vektor),
+      grün bei "eben" (|Roll|,|Pitch| < Toleranz), sonst akku-farben
+    - Top-Down-Fahrzeugansicht: Keilhöhe je Rad in cm, Referenzrad
+      (höchstes, kein Keil) grün markiert, übrige amber
+    - Kalibrierungs-Schaltflächen: aktuelle Lage als "eben" speichern
+      bzw. Null-Offset zurücksetzen
+    - Konfigurationsformular: Spurweite, Radstand, Einbaudrehung,
+      Achsen-Invertierung, Modul aktiv/inaktiv
+    - Polling 4Hz (250ms) nur während Tab aktiv ist, sonst inaktiv
+      (kein unnötiger I2C-Traffic im Hintergrund)
   Einstellungen-Tab:
     - Formular für alle 12 NVS-Parameter
     - Speichern → POST /api/params, Fabrik-Reset → POST /api/reset
@@ -586,10 +636,12 @@ P-SW15 | SICHERHEITS-IMPLEMENTIERUNGEN  [GEÄNDERT]
   13. Pfad-Validierung in handle_sddata: "/" am Anfang, kein "..".
   14. POST-Body-Limit: > 2048 Byte → HTTP 413.
 
-P-SW16 | BEKANNTE OFFENE PUNKTE (SOFTWARE)  [GEÄNDERT v5.3]
+P-SW16 | BEKANNTE OFFENE PUNKTE (SOFTWARE)  [GEÄNDERT v5.4]
   ERLEDIGT SEIT v5.1:
    • RTC: DS3231 an I2C GPIO 1/2 bestückt und produktiv — führende
      Zeitquelle, übersteht Stromausfälle eigenständig (siehe L-SW19).
+   • Lagesensor: MMA8452Q verbaut, level.h/.cpp + Dashboard-Tab +
+     REST-API vollständig implementiert (v5.4, siehe L-SW21/P-SW19).
 
   OFFEN:
   1. JK-BMS-Verkabelung: 3-Pin-JST-GH-Stecker (CAN/RS485-Port) nicht
@@ -633,6 +685,12 @@ P-SW16 | BEKANNTE OFFENE PUNKTE (SOFTWARE)  [GEÄNDERT v5.3]
      Pufferanforderung am Gerät reduzieren. IoT-SIM-Kandidaten:
      1NCE (Einmalgebühr, 500MB/10 Jahre, 170+ Länder), melita.io
      (Pay-per-Use), Telekom Smart Connect S.
+  8. Lagesensor (MMA8452Q, v5.4): Hardware verbaut, Firmware/REST-API
+     vollständig, Backend-Lücke aus dem Branch-Merge nachgetragen
+     (siehe Änderungsprotokoll v5.3→v5.4). OFFEN: Funktionstest am
+     Fahrzeug — Kalibrierung in der Ebene durchführen, Keilwerte
+     gegen real untergelegte Keile plausibilisieren, Einbaudrehung
+     (c_rot) ggf. an tatsächliche Sensor-Orientierung anpassen.
 
 P-SW17 | JK-BMS CAN-BUS-ALTERNATIVE (bmscan.h/.cpp)  [NEU v5.1]
   Zweck: Alternative Anbindung zum JK-BMS über CAN statt RS485, falls
@@ -703,9 +761,103 @@ P-SW18 | RGB-LED RUNDLAUF-ENCODING (io.h/.cpp, logic.cpp)  [NEU v5.1]
   Status auch im REST/WS-JSON sichtbar (io_to_json(): rgb-Objekt mit
   bms_fault, mppt_fault, soc, landstrom, d_plus, gel_lader, wr_remote).
 
+P-SW19 | LAGESENSOR (level.h/.cpp)  [NEU v5.4]
+  Sensor: MMA8452Q, 3-Achs-Beschleunigungssensor, I2C-Adresse 0x1D
+  (SA0=1, Default-Breakout) oder 0x1C (SA0=0) — beide werden beim
+  Init durchprobiert. WHO_AM_I-Register (0x0D) muss 0x2A liefern,
+  sonst gilt der Sensor als nicht erkannt (present=false).
+  Setup: STANDBY → XYZ_CFG=0x00 (±2g, kein High-Pass-Filter, max.
+  Auflösung) → CTRL2=0x02 (High-Resolution-Oversampling) →
+  CTRL1=0x21 (50Hz Datenrate + ACTIVE, 12-bit).
+  Rohwerte: 12-bit links-justiert, ±2g → 1024 LSB/g.
+  Glättung: EMA (α=0,30) über alle drei Achsen gegen Vibration/
+  Erschütterung, bevor Roll/Pitch berechnet werden.
+  Neigungsberechnung: roll = atan2(ay,az), pitch = atan2(-ax,
+  sqrt(ay²+az²)) — Standardformeln für Schwerkraftvektor-basierte
+  Neigung, in Grad.
+  Einbaudrehung (c_rot, 0/90/180/270°): rotiert roll/pitch um die
+  Hochachse, falls der Sensor nicht achsenparallel zum Fahrzeug
+  verbaut werden konnte. Zusätzlich optionale Achsen-Invertierung
+  (invRoll/invPitch) für spiegelverkehrten Einbau.
+  Kalibrierung (Null-Offset): aktueller Roh-Roll/Pitch wird als
+  "eben" in NVS gespeichert (zRoll/zPitch) und von allen folgenden
+  Messungen abgezogen. Reset löscht den Offset (zurück auf 0/0).
+  Ohne gültige Messung (present/valid=false) wird die Kalibrierung
+  abgelehnt — keine sinnvolle Referenz vorhanden.
+  Keilgeometrie: z_i = x_i·tan(roll) + y_i·tan(pitch) [mm], mit
+  x=±Spurweite/2, y=±Radstand/2 je Rad (Räder: VL(-x,+y) VR(+x,+y)
+  HL(-x,-y) HR(+x,-y)). Höchstes z_i wird Referenz (Keil 0); für
+  alle anderen Räder gilt keil_i = max(z) − z_i (negative Werte auf
+  0 geklemmt). level_to_json() liefert wedge[] in mm; das Dashboard
+  zeigt die Anzeige in cm (Division durch 10 im Frontend).
+  "Eben"-Schwelle: |roll| UND |pitch| < LEVEL_TOLERANCE_DEG (0,3°).
+  Bus-Koordination: alle I2C-Transaktionen (Erkennung, Setup, Poll)
+  laufen unter g_i2cMutex (siehe P-SW06) — DS3231 und Lagesensor
+  teilen sich GPIO 1/2, Zugriff aus unterschiedlichen Tasks/Cores.
+  Threading: level_task (Core 0, ~4Hz/250ms) pollt den Sensor und
+  legt das Ergebnis in einem per-portMUX geschützten Cache ab.
+  HTTP-Handler und WebSocket-Broadcast lesen ausschließlich den
+  Cache — kein I2C-Zugriff im Web-/AsyncTCP-Kontext.
+  Hotplug-Verhalten: ist das Modul aktiviert aber kein Sensor
+  erkannt, versucht level_task alle 3s erneut die Erkennung (z. B.
+  für nachträglichen Einbau ohne Neustart).
+  Persistenz: NVS-Namespace "level" (getrennt von "womo_cfg" und
+  "clock") — Spurweite, Radstand, Rotation, Invertierung, Enabled,
+  Null-Offset.
+  Optional/ausfalltolerant: Modul ohne Einfluss auf Schaltlogik,
+  RGB-LED oder andere Subsysteme. Fehlender oder defekter Sensor
+  zeigt sich nur im eigenen Dashboard-Tab (present=false), sonst
+  keine Auswirkung.
+  REST-API: siehe P-SW12 (/api/level, /api/levelcfg, /api/levelcalib).
+  Nachgetragener Merge-Fehler (siehe Änderungsprotokoll v5.3→v5.4):
+  die HTTP-Handler fehlten zunächst nach dem Branch-Merge — level.cpp
+  und der Lage-Tab waren vollständig, aber ohne Server-Anbindung
+  (404 statt JSON). Beim Doku-Update nachgetragen und ergänzt.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ÄNDERUNGSPROTOKOLL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+─── v5.3 → v5.4 ─────────────────────────────────────────────────
+
+  LAGESENSOR (NEU):
+  • Elektronische Wasserwaage über MMA8452Q am gemeinsamen I2C-Bus
+    mit der DS3231-RTC (GPIO 1/2, kein neuer GPIO nötig). Neue Datei
+    level.h/.cpp: Register-Treiber, EMA-Glättung, Roll/Pitch via
+    atan2, Keilgeometrie (keil_i = max(z) − z_i), NVS-Persistenz
+    Namespace "level", eigener Poll-Task (Core 0, 4Hz). [L-SW21,
+    P-SW03, P-SW05, P-SW19]
+  • Neuer g_i2cMutex (deklariert in clock.h) koordiniert DS3231 und
+    Lagesensor auf dem geteilten Bus. [P-SW06]
+  • Dashboard: neuer Tab "Lage" — Libellen-SVG, Top-Down-
+    Fahrzeugansicht mit Keilhöhen je Rad (cm), Kalibrierungs-
+    Buttons, Konfigurationsformular. 4Hz-Polling nur während der
+    Tab aktiv ist. [L-SW21, P-SW13]
+  • Vier neue REST-Endpunkte: GET /api/level, GET/POST /api/levelcfg,
+    POST /api/levelcalib. [P-SW12, P-SW19]
+
+  MERGE-NACHARBEIT (beim Zusammenführen von feature/lagesensor
+  nach main aufgefallen, kein Designfehler im Feature selbst):
+  • Die vier o.g. HTTP-Handler waren im gemergten Stand zunächst
+    NICHT registriert (server.on() fehlte in http_server.cpp/.h) —
+    level.cpp und das Dashboard-Frontend waren vollständig, der
+    Server gab auf alle /api/level*-Aufrufe 404 zurück. Kompilierte
+    und bootete sauber, der Lage-Tab blieb im Betrieb aber funktions-
+    los. Nachträglich ergänzt nach dem Muster der bestehenden
+    Handler (collect_body_chunk, StaticJsonDocument). [P-SW12, P-SW19]
+  • clock_local_offset_at() griff nach dem Merge wieder direkt auf
+    lt.tm_gmtoff zu (struct tm hat dieses Feld in der hier genutzten
+    newlib-Variante NICHT) — Compile-Fehler. Portabel über mktime()
+    gelöst: gmtime_r() zerlegt die UTC-Epoch, mktime() interpretiert
+    die Felder als lokale Wandzeit (gemäß gesetztem POSIX-TZ) und
+    rechnet zurück nach Epoch; die Differenz ist der gesuchte lokale
+    Offset inkl. Sommerzeit (tm_isdst=-1 vor dem mktime()-Aufruf,
+    damit DST anhand der TZ-Regel für das jeweilige Datum bestimmt
+    wird, nicht angenommen). [L-SW19, P-SW07]
+  • Ein verwaister, duplizierter Abschnitts-Kommentar
+    "<!-- EINSTELLUNGEN -->" vor der neuen Lage-Section in
+    data/index.html wurde entfernt (rein kosmetisch, kein
+    Funktionsfehler).
 
 ─── v5.1 → v5.3 ─────────────────────────────────────────────────
 
@@ -829,7 +981,7 @@ P-SW18 | RGB-LED RUNDLAUF-ENCODING (io.h/.cpp, logic.cpp)  [NEU v5.1]
     clock_set_epoch bool, 64-Bit-Zeitbasis, platformio.ini gepinnt.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-ERSTELLTE QUELLDATEIEN (Stand v5.3)
+ERSTELLTE QUELLDATEIEN (Stand v5.4)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   ✓ platformio.ini            (gepinnte Abhängigkeiten; optional
                                BMS_USE_CAN für CAN-Build, siehe P-SW17)
@@ -839,7 +991,9 @@ ERSTELLTE QUELLDATEIEN (Stand v5.3)
                                CLOCK_MEZ_OFFSET_SEC, GPIO 4/5 Renogy
                                WR-Status (GPIO_WR_LED_POWER/ALARM,
                                WR_LED_ACTIVE), Landstrom-Sensor als
-                               Spannungsteiler statt Optokoppler)
+                               Spannungsteiler statt Optokoppler;
+                               v5.4: LEVEL_I2C_ADDR_PRIMARY/ALT,
+                               LEVEL_POLL_INTERVAL_MS, LEVEL_TOLERANCE_DEG)
   ✓ src/params.h   ✓ src/params.cpp   (GEÄNDERT v5.0: 12 Parameter,
                                socGelOff entfernt, *High neu, pvWR entfernt)
   ✓ src/bms.h      ✓ src/bms.cpp      (GEÄNDERT v5.0: reduziertes JSON;
@@ -852,6 +1006,10 @@ ERSTELLTE QUELLDATEIEN (Stand v5.3)
   ✓ src/inverter.h ✓ src/inverter.cpp (GEÄNDERT v5.3: kein Stub mehr —
                                Renogy NVS, 2 debounced LED-Status-Eingänge
                                GPIO 4/5, g_invMutex, siehe L-SW17/P-SW09)
+  ✓ src/level.h    ✓ src/level.cpp    (NEU v5.4: Lagesensor MMA8452Q,
+                               EMA-Glättung, Roll/Pitch via atan2,
+                               Keilgeometrie, NVS "level", level_task
+                               4Hz Core 0, siehe L-SW21/P-SW19)
   ✓ src/io.h       ✓ src/io.cpp       (GEÄNDERT v5.1: RGB-Rundlauf-
                                Encoding statt Prioritäts-Enum, siehe P-SW18;
                                v5.3: Landstrom-Sensor Spannungsteiler statt
@@ -864,15 +1022,23 @@ ERSTELLTE QUELLDATEIEN (Stand v5.3)
                                UTC-Tag; SD-SPI-Hinweis ESP32-S3 siehe P-SW11)
   ✓ src/clock.h    ✓ src/clock.cpp    (GEÄNDERT v5.1: DS3231 produktiv,
                                führende Zeitquelle; wählbarer POSIX-TZ +
-                               DST via localtime_r, /api/tz, NVS "clock"/"tz")
+                               DST via localtime_r, /api/tz, NVS "clock"/"tz";
+                               v5.4: g_i2cMutex für geteilten Bus mit
+                               Lagesensor; clock_local_offset_at() auf
+                               portablen mktime()-Offset umgestellt
+                               (tm_gmtoff nicht exponiert, siehe P-SW07))
   ✓ src/watchdog.h ✓ src/watchdog.cpp (unverändert)
   ✓ src/http_server.h ✓ src/http_server.cpp  (GEÄNDERT v5.1: /api/tz
                                (GET/POST), tz-Abk. im Live-JSON, ts_mez
                                DST-korrekt; Routenreihenfolge siehe P-SW12;
-                               v5.3: Wechselrichter-Status-LED im System-Tab)
-  ✓ src/main.cpp              (unverändert)
+                               v5.3: Wechselrichter-Status-LED im System-Tab;
+                               v5.4: vier Lagesensor-Routen /api/level*
+                               nachgetragen, siehe P-SW12/P-SW19)
+  ✓ src/main.cpp              (v5.4: level_init()/level_task eingebunden)
   ✓ data/index.html           (GEÄNDERT v5.1: Zeitzonen-Auswahl im
                                Einstellungen-Tab, dynamisches MEZ/MESZ-Label;
                                Dashboard ohne Zellspannungen, 6 Metriken;
-                               v5.3: dreistufige WR-Status-LED im System-Tab)
+                               v5.3: dreistufige WR-Status-LED im System-Tab;
+                               v5.4: neuer Tab "Lage" — Libelle, Keile,
+                               Kalibrierung, Konfigurationsformular)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

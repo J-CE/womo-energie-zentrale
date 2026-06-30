@@ -1,4 +1,4 @@
-# Womo Energy Core v5.3
+# Womo Energy Core v5.4
 
 Eigenentwickeltes Energiemanagement-System für ein Wohnmobil, basierend auf einem ESP32-S3. Überwacht BMS und MPPT-Laderegler, steuert Verbraucher/Lader automatisch nach Ladezustand und Solarleistung, loggt historische Daten und liefert ein komplett offline-fähiges Web-Dashboard.
 
@@ -17,6 +17,7 @@ Eigenentwickeltes Energiemanagement-System für ein Wohnmobil, basierend auf ein
 | Starterbatterie-Lader | Joy-it COM-MOSFET (IRF9540N) | GPIO, High-Side |
 | Wechselrichter | Renogy 12V/2000W mit NVS (Netzvorrangschaltung) | Fernbedienungsport: Power-/Alarm-LED als GPIO-Eingang, Schalterkontakt als GPIO-Ausgang (Optokoppler) |
 | Landstrom-Erkennung | Spannungsteiler 2k/1,5k von 5V | GPIO, Input |
+| Lagesensor (Wasserwaage) | MMA8452Q, 3-Achs-Beschleunigungssensor | I2C, gemeinsamer Bus mit DS3231 (optional) |
 | Status | On-board WS2812 RGB-LED + externe Status-LED | GPIO |
 
 Die vollständige GPIO-Belegung steht in `src/config.h` (P-SW03 im Lastenheft).
@@ -32,6 +33,7 @@ Die vollständige GPIO-Belegung steht in `src/config.h` (P-SW03 im Lastenheft).
 - **Zweistufiger Watchdog** (Hardware + Software) mit Fail-Safe-GPIO-Zuständen
 - **RGB-Status-LED** zeigt BMS-/MPPT-Fehler, SoC, Landstrom und alle Aktoren gleichzeitig in einem Rundlauf-Muster an
 - **JK-BMS-Anbindung wahlweise über UART-TTL (GPS-Port) oder CAN** (Compile-Zeit-Umschaltung, identischer Datenoutput)
+- **Elektronische Wasserwaage** (optional, MMA8452Q): Neigungsmessung (Roll/Pitch), automatische Keilhöhen-Berechnung pro Rad, eigener Dashboard-Tab mit Libellen-Anzeige und Kalibrierung
 
 Die vollständige, nummerierte Anforderungsliste steht in [`Software_Lasten_Pflichtenheft.txt`](./Software_Lasten_Pflichtenheft.txt).
 
@@ -48,6 +50,7 @@ Die vollständige, nummerierte Anforderungsliste steht in [`Software_Lasten_Pfli
 │   ├── bmscan.h / .cpp     # JK-BMS CAN-Parser (Alternative zu bms.cpp)
 │   ├── mppt.h / .cpp       # VE.Direct Text-Parser + HEX-TX
 │   ├── inverter.h / .cpp   # Wechselrichter-Status (Renogy NVS, 2 LED-Eingänge)
+│   ├── level.h / .cpp      # Lagesensor / Wasserwaage (MMA8452Q, optional)
 │   ├── io.h / .cpp         # GPIO-Aktoren, Landstrom-Sensor, RGB-LED
 │   ├── logic.h / .cpp      # Schaltlogik
 │   ├── logger.h / .cpp     # PSRAM-Ringpuffer + SD-Logging
@@ -106,11 +109,12 @@ Details siehe Lastenheft, Abschnitt P-SW17.
 
 ## Status / Roadmap
 
-**Läuft bereits:** WLAN-AP, Webserver/Dashboard, LittleFS, SD-Karten-Logging, DS3231-RTC, RGB-Status-LED.
+**Läuft bereits:** WLAN-AP, Webserver/Dashboard, LittleFS, SD-Karten-Logging, DS3231-RTC, RGB-Status-LED, Lagesensor (MMA8452Q verbaut, Firmware inkl. REST-API vollständig).
 
 **Aktueller Hardware-Meilenstein:** JK-BMS-Anbindung umgestellt von RS485 (3-Pin JST-GH-Stecker nicht beschaffbar) auf direkte UART-TTL-Verdrahtung am GPS-Port (4-Pin, vorhandener Steckertyp) — kein MAX485 mehr nötig. Pinpegel am Gerät verifiziert (Pin 2/3 ~2,5V, kein VBAT). Offen: erste Kommunikationsverifikation; FW V11.287H liegt im Bereich, in dem manche Geräte über den GPS-Port keine Antwort mehr liefern — Fallback wäre die CAN-Variante (bmscan.cpp) oder eine MAX485-Doppelbrücke.
 
 **Geplant (Phase 2):**
+- Lagesensor: Funktionstest am Fahrzeug (Kalibrierung in der Ebene, Keilwerte gegen reale Schräglage plausibilisieren)
 - Renogy-Wechselrichter: Status-Eingänge (Power/Alarm) eingebaut — Pinbelegung/Spannungsteiler noch am realen Gerät zu verifizieren
 - Remote-Telemetrie (SIM7080G oder Walter-Board, MQTT über TLS)
 - Eigene Delphi-FireMonkey-App (Android/Windows)

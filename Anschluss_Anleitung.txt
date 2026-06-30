@@ -1,7 +1,7 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║   ANSCHLUSS-ANLEITUNG — WOMO ENERGY CORE / GODMODULE              ║
 ║   Sensoren & Aktoren, Modul für Modul                            ║
-║   Basis: Pflichtenheft v5.3 + config.h                           ║
+║   Basis: Pflichtenheft v5.4 + config.h                           ║
 ║   Stand: Hardware-Entscheidungen eingearbeitet —                 ║
 ║     • D+ und Gel-Lader über 2× Joy-it COM-MOSFET (IRF9540N)      ║
 ║     • JK-BMS direkt per UART-TTL am GPS-Port (kein MAX485        ║
@@ -12,6 +12,7 @@
 ║     • Sperrdioden (SR560) gegen Rückströme an D+ und Gel-Lader   ║
 ║     • Sicherungen: D+ 1A, Gel-Lader 3A                          ║
 ║     • DS3231-RTC bestückt und produktiv (war: reserviert)        ║
+║     • Lagesensor MMA8452Q am geteilten I2C-Bus (optional)        ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 WICHTIG — VOR DEM VERDRAHTEN LESEN
@@ -275,11 +276,38 @@ MODUL 11 — DS3231 RTC (I2C)  [BESTÜCKT, PRODUKTIV — führende Zeit]
   clock_init() — der DS3231 lieferte beim Kaltstart sonst sporadisch
   einen I2C-Timeout (Error 263).
 
+──────────────────────────────────────────────────────────────────
+MODUL 11b — Lagesensor MMA8452Q (I2C, geteilter Bus)  [OPTIONAL]
+──────────────────────────────────────────────────────────────────
+Elektronische Wasserwaage — misst die Fahrzeugneigung im Stillstand
+und berechnet daraus die nötige Keilhöhe je Rad.
+  GPIO 1 (SDA) → MMA8452Q SDA | GPIO 2 (SCL) → MMA8452Q SCL
+  VCC → 3,3V DIREKT (Breakout meist bereits auf 3,3V ausgelegt —
+    Datenblatt des konkreten Moduls prüfen) | GND → Sternpunkt
+  KEIN eigener GPIO nötig — Sensor teilt sich den I2C-Bus mit der
+  DS3231-RTC (Modul 11). Software-seitig über g_i2cMutex koordiniert
+  (siehe Pflichtenheft P-SW06/P-SW19) — beide Geräte können ohne
+  Anschlussänderung gleichzeitig am Bus hängen.
+  I2C-Adresse: 0x1D (SA0=1, Default bei den meisten Breakout-Modulen)
+  oder 0x1C (SA0=0) — Firmware probiert beim Start beide durch.
+  Polarität/Einbaulage: der Sensor kann in beliebiger Drehung um die
+  Hochachse (0/90/180/270°) verbaut werden — die Drehung wird in der
+  Lagesensor-Konfiguration im Dashboard ausgeglichen (kein Anschluss-
+  oder Verkabelungsthema, reine Software-Einstellung).
+  Optional/ausfalltolerant: Sensor kann auch nachträglich angesteckt
+  werden (level_task erkennt ihn alle 3s neu, falls noch nicht
+  gefunden) — kein Neustart nötig, keine Auswirkung auf andere Module
+  bei Fehlen oder Ausfall.
+  INBETRIEBNAHME: nach dem Anschließen im Dashboard-Tab "Lage" prüfen,
+  ob "Sensor erkannt" angezeigt wird. Fahrzeug auf bekannt ebenem
+  Untergrund kalibrieren ("aktuelle Lage als eben speichern"), danach
+  Keilwerte gegen real untergelegte Keile stichprobenartig prüfen.
+
 ══════════════════════════════════════════════════════════════════
 GPIO-GESAMTTABELLE
 ══════════════════════════════════════════════════════════════════
-  GPIO  1   I2C SDA    DS3231 (bestückt, produktiv)
-  GPIO  2   I2C SCL    DS3231 (bestückt, produktiv)
+  GPIO  1   I2C SDA    DS3231 (bestückt, produktiv) + Lagesensor *neu
+  GPIO  2   I2C SCL    DS3231 (bestückt, produktiv) + Lagesensor *neu
   GPIO  4   INPUT      WR-Status Power-LED (Renogy NVS, Teiler) *neu
   GPIO  5   INPUT      WR-Status Alarm-LED (Renogy NVS, Teiler) *neu
   GPIO 11   SPI CS     SD-Karte
@@ -346,6 +374,9 @@ PRÜF-CHECKLISTE VOR ERSTINBETRIEBNAHME
     pegel in beiden Zuständen gemessen, Teiler ≥100kΩ dimensioniert,
     WR_LED_ACTIVE in config.h ggf. angepasst
 [ ] Status-LED + Vorwiderstand | SD-Karte FAT32
+[ ] Lagesensor (optional): MMA8452Q an GPIO 1/2 (geteilter Bus mit
+    DS3231), Dashboard-Tab "Lage" zeigt "Sensor erkannt", auf ebenem
+    Untergrund kalibriert, Spurweite/Radstand im Konfigformular gesetzt
 [ ] Erststart: Module EINZELN zuschalten, im Monitor verifizieren
 ══════════════════════════════════════════════════════════════════
-Ende — Basis Pflichtenheft v5.3 + Hardware-Entscheidungen
+Ende — Basis Pflichtenheft v5.4 + Hardware-Entscheidungen

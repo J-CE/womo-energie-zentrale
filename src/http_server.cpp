@@ -15,6 +15,7 @@
 #include "logger.h"
 #include "inverter.h"
 #include "clock.h"
+#include "level.h"
 #include <WiFi.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
@@ -269,6 +270,59 @@ static void handle_wifi_post(AsyncWebServerRequest* req, uint8_t* data,
     req->send(200, "application/json", "{\"ok\":true}");
 }
 
+// ── Lagesensor (Wasserwaage, optional) ────────────────────────
+static void handle_level_get(AsyncWebServerRequest* req) {
+    req->send(200, "application/json", level_to_json());
+}
+
+static void handle_levelcfg_get(AsyncWebServerRequest* req) {
+    req->send(200, "application/json", level_cfg_to_json());
+}
+
+static void handle_levelcfg_post(AsyncWebServerRequest* req, uint8_t* data,
+                                 size_t len, size_t index, size_t total) {
+    char* body = collect_body_chunk(req, data, len, index, total);
+    if (!body) return;
+    StaticJsonDocument<256> doc;
+    if (deserializeJson(doc, body)) {
+        free(body);
+        req->send(400, "application/json", "{\"error\":\"JSON ungültig\"}");
+        return;
+    }
+    bool ok = true;
+    if (doc.containsKey("track"))     ok &= level_set_track    (doc["track"]);
+    if (doc.containsKey("wheelbase")) ok &= level_set_wheelbase(doc["wheelbase"]);
+    if (doc.containsKey("rot"))       ok &= level_set_rot      (doc["rot"]);
+    // invRoll/invPitch teilen sich einen Setter — beide gemeinsam anwenden,
+    // fehlender Wert fällt auf false zurück (Dashboard sendet ohnehin immer beide).
+    if (doc.containsKey("invRoll") || doc.containsKey("invPitch")) {
+        bool invR = doc["invRoll"]  | false;
+        bool invP = doc["invPitch"] | false;
+        ok &= level_set_invert(invR, invP);
+    }
+    if (doc.containsKey("enabled"))   ok &= level_set_enabled  (doc["enabled"]);
+    free(body);
+    req->send(ok?200:400, "application/json",
+              ok?"{\"ok\":true}":"{\"error\":\"Wert außerhalb Grenzen\"}");
+}
+
+static void handle_levelcalib_post(AsyncWebServerRequest* req, uint8_t* data,
+                                   size_t len, size_t index, size_t total) {
+    char* body = collect_body_chunk(req, data, len, index, total);
+    if (!body) return;
+    StaticJsonDocument<64> doc;
+    if (deserializeJson(doc, body)) {
+        free(body);
+        req->send(400, "application/json", "{\"error\":\"JSON ungültig\"}");
+        return;
+    }
+    bool reset = doc["reset"] | false;
+    free(body);
+    bool ok = level_calibrate(reset);
+    req->send(ok?200:400, "application/json",
+              ok?"{\"ok\":true}":"{\"error\":\"Keine gültige Messung zum Kalibrieren\"}");
+}
+
 static void handle_buffer(AsyncWebServerRequest* req) {
     uint32_t offset = req->hasParam("offset") ? req->getParam("offset")->value().toInt() : 0;
     uint32_t count  = req->hasParam("count")  ? req->getParam("count") ->value().toInt() : 900;
@@ -426,6 +480,12 @@ void webserver_init() {
     server.on("/api/wifi",    HTTP_GET,  handle_wifi_get);
     server.on("/api/wifi", HTTP_POST,
         [](AsyncWebServerRequest* r){}, nullptr, handle_wifi_post);
+    server.on("/api/level",      HTTP_GET,  handle_level_get);
+    server.on("/api/levelcfg",   HTTP_GET,  handle_levelcfg_get);
+    server.on("/api/levelcfg", HTTP_POST,
+        [](AsyncWebServerRequest* r){}, nullptr, handle_levelcfg_post);
+    server.on("/api/levelcalib", HTTP_POST,
+        [](AsyncWebServerRequest* r){}, nullptr, handle_levelcalib_post);
 
     // Statischer Catch-all ZULETZT — sonst fängt er /api/* ab
     server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
