@@ -288,12 +288,17 @@ uint32_t clock_now() {
 }
 
 // ── Lokaler Offset (s) für einen UTC-Zeitpunkt — DST-korrekt ───
-// localtime_r füllt tm_gmtoff gemäß gesetztem POSIX-TZ (inkl. Sommerzeit).
+// tm_gmtoff ist in dieser newlib-Variante nicht exponiert. Portabel über
+// mktime: gmtime_r zerlegt die UTC-Epoch, mktime interpretiert die tm-Felder
+// als lokale Wandzeit (gemäß gesetztem POSIX-TZ) und rechnet zurück nach
+// Epoch. Die Differenz t − as_local ist der lokale Offset inkl. Sommerzeit.
 int32_t clock_local_offset_at(uint32_t utc) {
     time_t t = (time_t)utc;
-    struct tm lt;
-    localtime_r(&t, &lt);
-    return (int32_t)lt.tm_gmtoff;
+    struct tm tm_utc;
+    gmtime_r(&t, &tm_utc);
+    tm_utc.tm_isdst = -1;          // DST anhand TZ-Regel für dieses Datum bestimmen
+    time_t as_local = mktime(&tm_utc);
+    return (int32_t)(t - as_local);
 }
 
 uint32_t clock_now_local() {
