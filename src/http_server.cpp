@@ -1,5 +1,5 @@
 // ============================================================
-//  http_server.cpp — Womo Energy Core v5.0
+//  http_server.cpp — Womo Energy Core v5.4
 //
 //  v5.0: 12 Parameter (socDPlusHigh/socGelHigh neu,
 //  socGelOff/pvWRThreshold* entfernt).
@@ -85,7 +85,9 @@ static String build_live_json() {
         (unsigned long)clock_now_local(),
         tzab.c_str(),
         clock_is_synced()?"true":"false");
-    String j = hdr;
+    String j;
+    j.reserve(1200);   // H-4: Reallokationen beim 2s-Broadcast vermeiden
+    j = hdr;
     j += "\"bms\":"   + bms_to_json()      + ",";
     j += "\"mppt\":"  + mppt_to_json()     + ",";
     j += "\"io\":"    + io_to_json()       + ",";
@@ -161,6 +163,7 @@ static void handle_params_post(AsyncWebServerRequest* req, uint8_t* data,
     if (doc.containsKey("socWROff"))            ok &= params_set_soc_wr_off           (doc["socWROff"]);
     if (doc.containsKey("relayDebounceCycles")) ok &= params_set_relay_debounce_cycles(doc["relayDebounceCycles"]);
     if (doc.containsKey("logIntervalMs"))       ok &= params_set_log_interval_ms      (doc["logIntervalMs"]);
+    if (doc.containsKey("manualTimeoutMin"))    ok &= params_set_manual_timeout_min   (doc["manualTimeoutMin"]);
     req->send(ok?200:400, "application/json",
               ok?"{\"ok\":true}":"{\"error\":\"Wert außerhalb Grenzen\"}");
 }
@@ -168,6 +171,40 @@ static void handle_params_post(AsyncWebServerRequest* req, uint8_t* data,
 static void handle_reset(AsyncWebServerRequest* req) {
     params_reset();
     req->send(200, "application/json", "{\"ok\":true}");
+}
+
+// ── Manueller Aktor-Override (Webinterface, v5.4) ─────────────
+// {"actuator":"dplus|gel|wr","mode":"auto|on|off"}
+// "auto" schaltet sofort zurück in die Automatik. "on"/"off" setzt
+// Manual-Modus + Deadman-Timer (siehe logic_set_manual/logic.cpp).
+static void handle_manual_post(AsyncWebServerRequest* req, uint8_t* data,
+                               size_t len, size_t index, size_t total) {
+    char* body = collect_body_chunk(req, data, len, index, total);
+    if (!body) return;
+    StaticJsonDocument<128> doc;
+    if (deserializeJson(doc, body)) {
+        free(body);
+        req->send(400, "application/json", "{\"error\":\"JSON ungültig\"}");
+        return;
+    }
+    String act  = String((const char*)(doc["actuator"] | ""));
+    String mode = String((const char*)(doc["mode"]     | ""));
+    free(body);
+
+    ManualActuator a;
+    if      (act == "dplus") a = MANUAL_DPLUS;
+    else if (act == "gel")   a = MANUAL_GEL;
+    else if (act == "wr")    a = MANUAL_WR;
+    else { req->send(400, "application/json", "{\"error\":\"unbekannter Aktor\"}"); return; }
+
+    bool ok;
+    if      (mode == "auto") ok = logic_set_manual(a, false, false);
+    else if (mode == "on")   ok = logic_set_manual(a, true,  true);
+    else if (mode == "off")  ok = logic_set_manual(a, true,  false);
+    else { req->send(400, "application/json", "{\"error\":\"unbekannter Modus\"}"); return; }
+
+    req->send(ok?200:400, "application/json",
+              ok?"{\"ok\":true}":"{\"error\":\"fehlgeschlagen\"}");
 }
 
 static void handle_time(AsyncWebServerRequest* req, uint8_t* data,
@@ -467,6 +504,8 @@ void webserver_init() {
     server.on("/api/live",    HTTP_GET,  handle_live);
     server.on("/api/params",  HTTP_GET,  handle_params_get);
     server.on("/api/reset",   HTTP_POST, handle_reset);
+    server.on("/api/manual", HTTP_POST,
+        [](AsyncWebServerRequest* r){}, nullptr, handle_manual_post);
     server.on("/api/buffer",  HTTP_GET,  handle_buffer);
     server.on("/api/sdfiles", HTTP_GET,  handle_sdfiles);
     server.on("/api/sddata",  HTTP_GET,  handle_sddata);
@@ -507,8 +546,15 @@ void webserver_broadcast() {
 
     if (ws.count() == 0) return;
     String json = build_live_json();
-    AsyncWebSocketMessageBuffer* buf = ws.makeBuffer(json.length());
-    if (!buf) return;
-    memcpy(buf->get(), json.c_str(), json.length());
-    ws.textAll(buf);
+
+    // K-2: NICHT ws.textAll() aus diesem Task (ws_task, Core 0) — das iteriert
+    // die Client-Liste, die der AsyncTCP-Task bei Connect/Disconnect verändert
+    // → Use-after-free, wenn sich ein Client während des Broadcasts trennt.
+    // Stattdessen je Client prüfen (verbunden + Sende-Queue frei) und einzeln
+    // senden. Reduziert das Race-Fenster deutlich und liefert Backpressure.
+    // Restrisiko bleibt (echte Absicherung nur im AsyncTCP-Kontext möglich).
+    for (auto& c : ws.getClients()) {
+        if (c.status() == WS_CONNECTED && c.canSend())
+            c.text(json.c_str(), json.length());
+    }
 }

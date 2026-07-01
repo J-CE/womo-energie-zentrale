@@ -1,5 +1,5 @@
 // ============================================================
-//  params.cpp — Womo Energy Core v5.0
+//  params.cpp — Womo Energy Core v5.4
 // ============================================================
 #include "params.h"
 #include <Preferences.h>
@@ -21,6 +21,7 @@ static void _write_defaults() {
     prefs.putUChar ("socWROff",      DEFAULT_SOC_WR_OFF);
     prefs.putUChar ("debounceCyc",   DEFAULT_RELAY_DEBOUNCE_CYCLES);
     prefs.putULong ("logIntervalMs", DEFAULT_LOG_INTERVAL_MS);
+    prefs.putUChar ("manualTOMin",   DEFAULT_MANUAL_TIMEOUT_MIN);
 }
 
 static void _load_from_nvs() {
@@ -36,6 +37,7 @@ static void _load_from_nvs() {
     g_params.socWROff            = prefs.getUChar ("socWROff",      DEFAULT_SOC_WR_OFF);
     g_params.relayDebounceCycles = prefs.getUChar ("debounceCyc",   DEFAULT_RELAY_DEBOUNCE_CYCLES);
     g_params.logIntervalMs       = prefs.getULong ("logIntervalMs", DEFAULT_LOG_INTERVAL_MS);
+    g_params.manualTimeoutMin    = prefs.getUChar ("manualTOMin",   DEFAULT_MANUAL_TIMEOUT_MIN);
 }
 
 void params_init() {
@@ -47,6 +49,8 @@ void params_init() {
     // v5.0: neue Schlüssel anlegen falls NVS aus v4.x kommt
     if (!prefs.isKey("socDPlusHigh")) prefs.putUChar("socDPlusHigh", DEFAULT_SOC_D_PLUS_HIGH);
     if (!prefs.isKey("socGelHigh"))   prefs.putUChar("socGelHigh",   DEFAULT_SOC_GEL_HIGH);
+    // v5.4: manueller Aktor-Override — Timeout-Parameter falls NVS aus älterer Version kommt
+    if (!prefs.isKey("manualTOMin"))  prefs.putUChar("manualTOMin",  DEFAULT_MANUAL_TIMEOUT_MIN);
 
     _load_from_nvs();
     Serial.printf("[PARAMS] D+: SOC %u/%u/High%u PV %u/%u\n",
@@ -112,6 +116,10 @@ bool params_set_log_interval_ms(uint32_t v) {
     if (v < 60000 || v > 3600000) return false;
     g_params.logIntervalMs = v; prefs.putULong("logIntervalMs", v); return true;
 }
+bool params_set_manual_timeout_min(uint8_t v) {
+    if (v < 1 || v > 240) return false;
+    g_params.manualTimeoutMin = v; prefs.putUChar("manualTOMin", v); return true;
+}
 
 String params_to_json() {
     char buf[512];
@@ -120,12 +128,14 @@ String params_to_json() {
         "\"pvThresholdOn\":%u,\"pvThresholdOff\":%u,"
         "\"socGelOn\":%u,\"socGelHigh\":%u,\"pvGelMinW\":%u,"
         "\"socWROn\":%u,\"socWROff\":%u,"
-        "\"relayDebounceCycles\":%u,\"logIntervalMs\":%lu}",
+        "\"relayDebounceCycles\":%u,\"logIntervalMs\":%lu,"
+        "\"manualTimeoutMin\":%u}",
         g_params.socDPlusOn, g_params.socDPlusOff, g_params.socDPlusHigh,
         g_params.pvThresholdOn, g_params.pvThresholdOff,
         g_params.socGelOn, g_params.socGelHigh, g_params.pvGelMinW,
         g_params.socWROn, g_params.socWROff,
         g_params.relayDebounceCycles,
-        (unsigned long)g_params.logIntervalMs);
+        (unsigned long)g_params.logIntervalMs,
+        g_params.manualTimeoutMin);
     return String(buf);
 }

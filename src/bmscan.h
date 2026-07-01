@@ -1,5 +1,5 @@
 // ============================================================
-//  bmscan.h — Womo Energy Core v5.0
+//  bmscan.h — Womo Energy Core v5.4
 //  JK-BMS CAN-Bus-Empfänger (Alternative zu bms.cpp/RS485)
 //
 //  100 % aufruf- und antwortkompatibel zu bms.h:

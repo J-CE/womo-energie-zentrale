@@ -1,5 +1,5 @@
 // ============================================================
-//  bmscan.cpp — Womo Energy Core v5.0
+//  bmscan.cpp — Womo Energy Core v5.4
 //  JK-BMS CAN-Bus-Empfänger (TWAI), Alternative zu bms.cpp
 //
 //  Aktiv NUR wenn BMS_USE_CAN definiert ist (sonst leer übersetzt →

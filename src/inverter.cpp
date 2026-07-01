@@ -1,5 +1,5 @@
 // ============================================================
-//  inverter.cpp — Womo Energy Core v5.3
+//  inverter.cpp — Womo Energy Core v5.4
 //  Wechselrichter-Status — Renogy 12V/2000W mit NVS (2 LED-Eingänge)
 //
 //  Ersetzt den v5.0–v5.2-Stub (Edecoa-RJ12-Protokoll-Sniffer, nie

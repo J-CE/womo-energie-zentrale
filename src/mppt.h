@@ -1,5 +1,5 @@
 // ============================================================
-//  mppt.h — Womo Energy Core v5.0
+//  mppt.h — Womo Energy Core v5.4
 //  Victron VE.Direct Text-Parser + HEX-TX Temperatur
 //
 //  v5.0: UART2 bidirektional (RX=38, TX=42)

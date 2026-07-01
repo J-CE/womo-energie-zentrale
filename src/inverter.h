@@ -1,5 +1,5 @@
 // ============================================================
-//  inverter.h — Womo Energy Core v5.3
+//  inverter.h — Womo Energy Core v5.4
 //  Wechselrichter-Status — Renogy 12V/2000W mit NVS
 //
 //  Hardware: Renogy Pure Sine Wave Inverter mit Netzvorrangschaltung

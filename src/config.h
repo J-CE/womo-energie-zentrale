@@ -1,5 +1,5 @@
 // ============================================================
-//  config.h — Womo Energy Core v5.3
+//  config.h — Womo Energy Core v5.4
 //  Zielplattform: ESP32-S3 DevKitC-1 N16R8
 //
 //  GPIO-Reservierungen ESP32-S3 N16R8:
@@ -36,12 +36,14 @@
 
 #define SERIAL_BAUD                 115200
 
-// JK-BMS über MAX485 (UART1)
+// JK-BMS direkt per TTL-UART am GPS-Port (UART1) — kein MAX485 mehr
+// im Pfad seit der Umstellung vom nicht beschaffbaren RS485-Port
+// (s. Anschluss_Anleitung.txt Modul 2). GPIO 15 (ehem. MAX485 DE/RE)
+// ist frei und unbeschaltet.
 #define UART_BMS_PORT               1
 #define UART_BMS_RX                 16
 #define UART_BMS_TX                 17
 #define UART_BMS_BAUD               115200
-#define GPIO_RS485_DE_RE            15
 
 // VE.Direct (Victron MPPT) — UART2, bidirektional ab v5.0
 //   RX: Spannungsteiler 1kΩ+2kΩ (5V→3,3V)
@@ -222,6 +224,9 @@
 
 // ── Flatter-Schutz ───────────────────────────────────────────
 #define DEFAULT_RELAY_DEBOUNCE_CYCLES   10      // Zyklen × 2s = 20s Stabilität
+
+// ── Manueller Aktor-Override (Webinterface, v5.4) ─────
+#define DEFAULT_MANUAL_TIMEOUT_MIN      30      // min bis Deadman-Rückfall auf Auto (Refresh bei jedem Befehl)
 
 // ── PV-Glättung ──────────────────────────────────────────────
 #define LOGIC_PPV_MA_WINDOW             15      // Samples × 2s = 30s MA-Fenster

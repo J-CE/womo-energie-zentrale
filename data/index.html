@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     index.html — Womo Energy Core v5.1
+     index.html — Womo Energy Core v5.4
      Dashboard: BMS · MPPT · Schaltlogik · Logging · Parameter · Zeitzone
      Eingebettet in LittleFS, erreichbar via http://192.168.4.1
      WLAN AP: GODMODULE (Passwort: BM-hy678)
@@ -90,13 +90,15 @@
   /* Zellspannungs-CSS entfernt v5.0 */
 
   .chips{display:flex;flex-direction:column;gap:8px}
-  .actuator{display:flex;align-items:center;gap:11px;background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:11px 13px}
+  .actuator{display:flex;flex-direction:column;gap:8px;background:var(--bg2);border:1px solid var(--line);border-radius:11px;padding:11px 13px}
+  .actuator .arow{display:flex;align-items:center;gap:11px}
   .sw{width:42px;height:24px;border-radius:99px;background:#2a3741;flex:0 0 auto;position:relative;transition:.25s;border:1px solid var(--line2)}
   .sw::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:99px;background:#7c8a94;transition:.25s}
   .sw.on{background:var(--accent,var(--ok))} .sw.on::after{left:20px;background:#0a0f12}
   .actuator .meta{flex:1;min-width:0} .actuator .nm{font-weight:600;font-size:14px}
   .actuator .rs{font-size:11.5px;color:var(--muted);font-family:var(--mono);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .actuator .db{font-size:11px;color:var(--faint);font-family:var(--mono)}
+  .manctl{align-self:flex-start}
 
   /* Alarm-CSS entfernt v5.0 */
   .ok-tag{font-size:12px;color:var(--ok);font-weight:600}
@@ -147,7 +149,7 @@
 <header>
   <div class="brand">
     <div class="logo">G</div>
-    <div><h1>GODMODULE · Energy Core</h1><div class="sub">Womo Energy Core v5.0</div></div>
+    <div><h1>GODMODULE · Energy Core</h1><div class="sub">Womo Energy Core v5.4</div></div>
   </div>
   <div class="pills">
     <span class="pill"><span id="dWs" class="dot"></span><span id="tWs">Verbinde…</span></span>
@@ -190,9 +192,9 @@
         </div>
         <div class="kv">
           <span class="k">Kapazität</span><span class="v"><span id="bRem">–</span> / <span id="bNom">–</span> Ah</span>
-          <span class="k">Zyklen</span><span class="v" id="bCyc">–</span>
           <span class="k">Temp MOS / Gehäuse</span><span class="v"><span id="tMos">–</span> / <span id="tS1">–</span> °C</span>
           <span class="k">Temp Zelle (→ MPPT)</span><span class="v"><span id="tS2">–</span> °C</span>
+          <span class="k">MOSFET Laden / Entladen</span><span class="v" id="bMos">–</span>
         </div>
       </div>
 
@@ -262,14 +264,33 @@
       <div class="card netz">
         <div class="ch"><h2>Aktoren <span class="accent">·</span> Logik</h2><span class="badge" id="landBadge">–</span></div>
         <div class="chips">
-          <div class="actuator"><div class="sw" id="swD"></div>
+          <div class="actuator"><div class="arow"><div class="sw" id="swD"></div>
             <div class="meta"><div class="nm">D+ Relais · Kühlschrank</div><div class="rs" id="rsD">–</div></div><div class="db" id="dbD"></div></div>
-          <div class="actuator"><div class="sw" id="swG"></div>
+            <div class="seg manctl" data-act="dplus">
+              <button type="button" data-mode="auto" class="active">Auto</button>
+              <button type="button" data-mode="on">Ein</button>
+              <button type="button" data-mode="off">Aus</button>
+            </div>
+          </div>
+          <div class="actuator"><div class="arow"><div class="sw" id="swG"></div>
             <div class="meta"><div class="nm">Gel-Lader · Starterbatterie</div><div class="rs" id="rsG">–</div></div><div class="db" id="dbG"></div></div>
-          <div class="actuator"><div class="sw" id="swW"></div>
+            <div class="seg manctl" data-act="gel">
+              <button type="button" data-mode="auto" class="active">Auto</button>
+              <button type="button" data-mode="on">Ein</button>
+              <button type="button" data-mode="off">Aus</button>
+            </div>
+          </div>
+          <div class="actuator"><div class="arow"><div class="sw" id="swW"></div>
             <div class="meta"><div class="nm">Wechselrichter · Remote</div><div class="rs" id="rsW">–</div></div><div class="db" id="dbW"></div></div>
-          <div class="actuator"><div class="sw" id="swL" style="--accent:var(--netz)"></div>
+            <div class="seg manctl" data-act="wr">
+              <button type="button" data-mode="auto" class="active">Auto</button>
+              <button type="button" data-mode="on">Ein</button>
+              <button type="button" data-mode="off">Aus</button>
+            </div>
+          </div>
+          <div class="actuator"><div class="arow"><div class="sw" id="swL" style="--accent:var(--netz)"></div>
             <div class="meta"><div class="nm">Landstrom (Sensor)</div><div class="rs">Eingang</div></div></div>
+          </div>
         </div>
       </div>
 
@@ -289,6 +310,7 @@
     </div>
   </section>
 
+  <!-- ============ EINSTELLUNGEN ============ -->
   <!-- ============ LAGE (Wasserwaage) ============ -->
   <section id="lage" class="view">
     <div class="grid">
@@ -396,6 +418,8 @@
           <div class="ip"><input type="number" name="relayDebounceCycles" min="1" max="60"><span class="unit">Zyklen</span></div></div>
         <div class="field"><label>SD-Schreibintervall</label><div class="hint">Batch-Intervall der Minutenwerte (1–60 min).</div>
           <div class="ip"><input type="number" id="logMin" min="1" max="60"><span class="unit">min</span></div></div>
+        <div class="field"><label>Manual-Deadman-Timeout</label><div class="hint">Automatischer Rückfall auf Auto nach dieser Zeit ohne neuen manuellen Befehl (1–240 min).</div>
+          <div class="ip"><input type="number" name="manualTimeoutMin" min="1" max="240"><span class="unit">min</span></div></div>
         <div class="actions">
           <button type="submit" class="btn primary" id="saveBtn">Speichern</button>
           <button type="button" class="btn ghost" id="revertBtn">Verwerfen</button>
@@ -453,7 +477,7 @@
 </main>
 
 <div id="toast"></div>
-<div class="foot">GODMODULE · Energy Core v5.1 · WLAN: GODMODULE · http://192.168.4.1 · <span id="footTz">MEZ</span></div>
+<div class="foot">GODMODULE · Energy Core v5.4 · WLAN: GODMODULE · http://192.168.4.1 · <span id="footTz">MEZ</span></div>
 
 <script>
 "use strict";
@@ -497,11 +521,6 @@ function startPoll(){if(pollTimer)return;setConn("poll");
 function stopPoll(){if(pollTimer){clearInterval(pollTimer);pollTimer=null;}}
 setInterval(()=>{const s=Date.now()-lastData>8000;document.querySelectorAll(".card").forEach(c=>c.classList.toggle("stale",s&&lastData>0));},2000);
 
-const WARN=[[1,"Kapazität niedrig"],[2,"MOS-Temp hoch"],[4,"Lade-Überspannung"],[8,"Entlade-Unterspg."],
-[16,"Lade-Überstrom"],[32,"Entlade-Überstrom"],[64,"Kurzschluss"],[128,"Zelle Überspg."],
-[256,"Zelle Unterspg."],[512,"Ladetemperatur"],[1024,"Entladetemp."],[2048,"Umgebungstemp."]];
-function decodeWarn(f){const o=[];for(const[m,n]of WARN)if(f&m)o.push(n);return o;}
-
 let lastBms=null, gEpoch=0, gBootTs=0, gSynced=false;
 function render(D){
   lastData=Date.now();
@@ -528,10 +547,8 @@ function render(D){
     $("tMos").textContent=fmt(b.t_mos,0);$("tS1").textContent=fmt(b.t_s1,0);
     $("tS2").textContent=fmt(b.t_s2,0);
     const mo=x=>x?'<span style="color:var(--ok)">EIN</span>':'<span style="color:var(--faint)">aus</span>';
-    // MOSFET pre_en + Schutzparameter entfernt v5.0
+    $("bMos").innerHTML=`${mo(b.ch_en)} / ${mo(b.dis_en)}`;
     $("sBfc").textContent=intf(b.fc);$("sBec").textContent=intf(b.ec);
-    // renderCells entfernt v5.0
-    // Alarme entfernt v5.0 (warningFlags nicht mehr erfasst)
   }else{$("bmsBadge").textContent="keine Daten";}
 
   const m=D.mppt||{};
@@ -549,6 +566,8 @@ function render(D){
   setSw("swD",io.relay_dplus);setSw("swG",io.mosfet_gel);setSw("swW",io.wr_remote);setSw("swL",io.landstrom);
   $("rsD").textContent=lg.reason_dplus||"–";$("rsG").textContent=lg.reason_gel||"–";$("rsW").textContent=lg.reason_wr||"–";
   $("dbD").textContent=db(lg.db_dplus);$("dbG").textContent=db(lg.db_gel);$("dbW").textContent=db(lg.db_wr);
+  const man=lg.manual||{};
+  setSeg("dplus",man.dplus);setSeg("gel",man.gel);setSeg("wr",man.wr);
   $("landBadge").innerHTML=io.landstrom?'<span style="color:var(--netz)">⚡ Landstrom</span>':'<span style="color:var(--faint)">Autark</span>';
 
   $("sBuf").textContent=intf(D.buf);$("sSd").innerHTML=D.sd?'<span style="color:var(--ok)">verfügbar</span>':'<span style="color:var(--bad)">fehlt</span>';
@@ -583,10 +602,26 @@ function render(D){
   renderLevel(D.level);
 }
 function setSw(id,on){$(id).classList.toggle("on",!!on);}
-function db(v){if(v==null)return"";if(v>0)return`+${v}▲`;if(v<0)return`${v}▼`;return"·";}
-function renderCells(b){
-  // Zellspannungen entfernt v5.0
+function setSeg(act,st){
+  const el=document.querySelector(`.manctl[data-act="${act}"]`);
+  if(!el)return;
+  const mode=(!st||!st.a)?"auto":(st.w?"on":"off");
+  el.querySelectorAll("button").forEach(b=>b.classList.toggle("active",b.dataset.mode===mode));
 }
+document.querySelectorAll(".manctl").forEach(seg=>{
+  const act=seg.dataset.act;
+  seg.querySelectorAll("button").forEach(b=>b.onclick=async()=>{
+    b.disabled=true;
+    try{
+      const r=await fetch("/api/manual",{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({actuator:act,mode:b.dataset.mode})});
+      const res=await r.json();
+      if(!(r.ok&&res.ok))toast(res.error||"Fehlgeschlagen","bad");
+    }catch(_){toast("Manual-Befehl fehlgeschlagen","bad");}
+    finally{b.disabled=false;}
+  });
+});
+function db(v){if(v==null)return"";if(v>0)return`+${v}▲`;if(v<0)return`${v}▼`;return"·";}
 
 /* ---- Live-Graph ---- */
 const METRICS={
@@ -699,7 +734,7 @@ window.addEventListener("resize",()=>{
 });
 
 /* ---- Einstellungen ---- */
-const PKEYS=["socDPlusOn","socDPlusOff","socDPlusHigh","pvThresholdOn","pvThresholdOff","socGelOn","socGelHigh","pvGelMinW","socWROn","socWROff","relayDebounceCycles","logIntervalMs"];
+const PKEYS=["socDPlusOn","socDPlusOff","socDPlusHigh","pvThresholdOn","pvThresholdOff","socGelOn","socGelHigh","pvGelMinW","socWROn","socWROff","relayDebounceCycles","manualTimeoutMin"];
 async function loadParams(){
   try{const r=await fetch("/api/params",{cache:"no-store"});const p=await r.json();const f=$("paramForm");
     PKEYS.forEach(k=>{if(f[k])f[k].value=p[k];});
@@ -709,7 +744,7 @@ async function loadParams(){
 $("revertBtn").onclick=loadParams;
 $("paramForm").addEventListener("submit",async e=>{
   e.preventDefault();const f=e.target,body={};
-  PKEYS.forEach(k=>{if(f[k].value!=="")body[k]=+f[k].value;});
+  PKEYS.forEach(k=>{if(f[k]&&f[k].value!=="")body[k]=+f[k].value;});
   if($("logMin").value!=="")body.logIntervalMs=Math.round(+$("logMin").value*60000);
   $("saveBtn").disabled=true;
   try{const r=await fetch("/api/params",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});

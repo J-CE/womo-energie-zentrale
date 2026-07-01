@@ -1,5 +1,5 @@
 // ============================================================
-//  main.cpp — Womo Energy Core v5.0
+//  main.cpp — Womo Energy Core v5.4
 //
 //  Watchdog (zweistufig):
 //   • HW-WDT (esp_task_wdt, 4s) überwacht loop() → harter Reboot
@@ -102,11 +102,16 @@ static void ws_task(void*) {
 
 void setup() {
     Serial.begin(SERIAL_BAUD);
+    // K-1: USB-CDC verwirft TX-Daten statt zu blockieren, wenn kein Host
+    // liest (Normalfall im Womo-Betrieb ohne angeschlossenen PC). Ohne das
+    // kann Serial.write() die aufrufende Task bis zum TX-Timeout blockieren —
+    // fatal, wenn das im gehaltenen g_bmsMutex passiert (→ SW-WDT-Reboot).
+    Serial.setTxTimeoutMs(0);
     delay(500);
 
     Serial.println("\n╔═══════════════════════════════╗");
     Serial.println("║   GODMODULE — Energy Core     ║");
-    Serial.println("║   Womo Energy Core v5.0       ║");
+    Serial.println("║   Womo Energy Core v5.4       ║");
     Serial.println("╚═══════════════════════════════╝\n");
 
     io_init();
@@ -123,7 +128,7 @@ void setup() {
 
     xTaskCreatePinnedToCore(logic_task,  "logic",  8192, nullptr, 4, &h_logic,  1);
     xTaskCreatePinnedToCore(mppt_task,   "mppt",   4096, nullptr, 3, &h_mppt,   1);
-    xTaskCreatePinnedToCore(logger_task, "logger", 4096, nullptr, 2, &h_logger, 0);
+    xTaskCreatePinnedToCore(logger_task, "logger", 6144, nullptr, 2, &h_logger, 0);  // K-4: SD-Aufrufkette tief
     xTaskCreatePinnedToCore(ws_task,     "ws",     4096, nullptr, 2, &h_ws,     0);
     xTaskCreatePinnedToCore(level_task,  "level",  4096, nullptr, 1, &h_level,  0);
 

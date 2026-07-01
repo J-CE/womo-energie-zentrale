@@ -1,5 +1,5 @@
 // ============================================================
-//  logger.h — Womo Energy Core v5.0
+//  logger.h — Womo Energy Core v5.4
 //  PSRAM-Ringpuffer (86400 × 32B = 48h @ 2s) + SD-CSV-Logging
 //
 //  LogEntry:  __attribute__((packed)), exakt 32 Bytes

@@ -1,6 +1,6 @@
 // ============================================================
-//  bms.h — Womo Energy Core v5.0
-//  JK-BMS RS485 Parser
+//  bms.h — Womo Energy Core v5.4
+//  JK-BMS UART-Parser (direkt per TTL am GPS-Port, kein MAX485)
 //
 //  Reduzierter Datenumfang ab v5.0 (bewusst):
 //  Zellspannungen, Zyklen, Balancing, Alarm-/Schutz-Bitmasks

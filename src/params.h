@@ -1,5 +1,5 @@
 // ============================================================
-//  params.h — Womo Energy Core v5.0
+//  params.h — Womo Energy Core v5.4
 //  12 NVS-Parameter (Namespace "womo_cfg")
 //
 //  v5.0 Änderungen:
@@ -34,6 +34,9 @@ struct Params {
     // ── System (2 Parameter) ──────────────────────────────
     uint8_t  relayDebounceCycles;
     uint32_t logIntervalMs;
+
+    // ── Manueller Aktor-Override (1 Parameter, v5.4) ──────
+    uint8_t  manualTimeoutMin;  // min bis Deadman-Rückfall auf Auto
 };
 
 extern Params g_params;
@@ -53,5 +56,6 @@ bool params_set_soc_wr_on            (uint8_t  v);
 bool params_set_soc_wr_off           (uint8_t  v);
 bool params_set_relay_debounce_cycles(uint8_t  v);
 bool params_set_log_interval_ms      (uint32_t v);
+bool params_set_manual_timeout_min   (uint8_t  v);
 
 String params_to_json();

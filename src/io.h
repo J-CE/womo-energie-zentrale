@@ -1,5 +1,5 @@
 // ============================================================
-//  io.h — Womo Energy Core v5.1
+//  io.h — Womo Energy Core v5.4
 //  GPIO-Abstraktion: Relais, MOSFETs, LEDs, Landstrom-Sensor
 //
 //  Ausgänge (alle Fail-Safe LOW bei Reset):

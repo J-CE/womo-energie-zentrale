@@ -1,5 +1,5 @@
 // ============================================================
-//  level.h — Womo Energy Core (optionales Modul)
+//  level.h — Womo Energy Core v5.4 (optionales Modul)
 //  Elektronische Wasserwaage / Lagesensor
 //
 //  Sensor:  MMA8452Q (3-Achs-Beschleunigungssensor) am GEMEINSAMEN

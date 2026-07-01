@@ -1,5 +1,5 @@
 // ============================================================
-//  mppt.cpp — Womo Energy Core v5.0
+//  mppt.cpp — Womo Energy Core v5.4
 //  Victron VE.Direct Text Protocol Parser + HEX-TX Temperatur
 //
 //  Text-Protokoll (VE.Direct Protocol v3.34, April 2025):

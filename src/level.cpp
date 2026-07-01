@@ -1,5 +1,5 @@
 // ============================================================
-//  level.cpp — Womo Energy Core (optionales Modul)
+//  level.cpp — Womo Energy Core v5.4 (optionales Modul)
 //  Elektronische Wasserwaage / Lagesensor (MMA8452Q)
 // ============================================================
 #include "level.h"

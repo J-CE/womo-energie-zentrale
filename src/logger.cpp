@@ -1,5 +1,5 @@
 // ============================================================
-//  logger.cpp — Womo Energy Core v5.0
+//  logger.cpp — Womo Energy Core v5.4
 //  PSRAM-Ringpuffer + SD-CSV-Logging
 //
 //  Locking-Strategie:
@@ -53,6 +53,13 @@ static uint8_t   s_rowCount = 0;
 static uint32_t  s_lastMinuteMs = 0;
 static uint32_t  s_lastFlushMs  = 0;
 static bool      s_sd_ok        = false;
+static uint32_t  s_sdRetryMs    = 0;      // B-15: nächster Remount-Versuch
+
+// K-4: Batch-Puffer NICHT auf dem Stack (60×32=1920 B) — je einer pro Task,
+// da logger_flush_sd (logger_task) und logger_emergency_back_up (wdt_task)
+// gleichzeitig laufen können (Watchdog feuert mitten im Flush).
+static LogEntry  s_flushBuf[MIN_ROWS_MAX];   // nur logger_task
+static LogEntry  s_emergBuf[MIN_ROWS_MAX];   // nur wdt_task
 
 static const char* CSV_HEADER =
     "ts,v,i,soc,t_mos,t_s1,t_s2,t_mos2,"
@@ -94,23 +101,33 @@ static void finalize_minute_locked() {
 }
 
 // ── SD-Schreiben (immer unter g_sdMutex aufrufen!) ────────────
-static void write_row_to_sd(const LogEntry& e) {
-    char fname[24];
-    // Dateiname nach UTC-Tag (Storage rein UTC, DST-unabhängig stabil).
-    // ts-Spalte im CSV ist ebenfalls UTC; lokale Zeit nur in der Anzeige.
-    uint32_t days = e.timestamp / 86400;
-    snprintf(fname, sizeof(fname), "/log_%05lu.csv", (unsigned long)days);
-    bool new_file = !SD.exists(fname);
-    File f = SD.open(fname, FILE_APPEND);
-    if (!f) { Serial.printf("[LOG] SD Schreib-Fehler: %s\n", fname); return; }
-    if (new_file) f.print(CSV_HEADER);
-    f.print(logger_entry_to_csv(e));
-    f.close();
-}
-
-static void write_batch_to_sd(const LogEntry* rows, uint8_t n) {
-    for (uint8_t k = 0; k < n; k++) write_row_to_sd(rows[k]);
-    if (n) Serial.printf("[LOG] SD-Batch: %u Minutenzeilen\n", n);
+// B-14: Öffnet die Tagesdatei EINMAL pro Batch (statt 60× open/close pro
+// Zeile) — verkürzt die g_sdMutex-Haltezeit drastisch, sodass ein parallel
+// laufender Web-SD-Zugriff den Flush nicht mehr in den Timeout treibt.
+// Rückgabe false = Öffnen fehlgeschlagen (→ Aufrufer setzt s_sd_ok=false).
+static bool write_batch_to_sd(const LogEntry* rows, uint8_t n) {
+    if (!n) return true;
+    bool     ok     = true;
+    uint32_t curDay = 0xFFFFFFFFu;
+    File     f;
+    for (uint8_t k = 0; k < n; k++) {
+        uint32_t day = rows[k].timestamp / 86400;
+        if (day != curDay) {
+            if (f) f.close();
+            char fname[24];
+            // Dateiname nach UTC-Tag (Storage rein UTC, DST-unabhängig stabil).
+            snprintf(fname, sizeof(fname), "/log_%05lu.csv", (unsigned long)day);
+            bool new_file = !SD.exists(fname);
+            f = SD.open(fname, FILE_APPEND);
+            if (!f) { Serial.printf("[LOG] SD Schreib-Fehler: %s\n", fname); ok = false; break; }
+            if (new_file) f.print(CSV_HEADER);
+            curDay = day;
+        }
+        f.print(logger_entry_to_csv(rows[k]));
+    }
+    if (f) f.close();
+    if (ok) Serial.printf("[LOG] SD-Batch: %u Minutenzeilen\n", n);
+    return ok;
 }
 
 // ── Init ─────────────────────────────────────────────────────
@@ -145,6 +162,20 @@ void logger_init() {
     s_rowCount     = 0;
     s_lastMinuteMs = millis();
     s_lastFlushMs  = millis();
+}
+
+// B-15: SD zur Laufzeit neu einhängen (Karte gezogen/Wackler/voll).
+// Nur aus logger_task aufrufen. Hält g_sdMutex kurz.
+static bool sd_try_remount() {
+    bool ok = false;
+    if (xSemaphoreTake(g_sdMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+        SD.end();
+        ok = SD.begin(SPI_SD_CS, sdSPI);
+        s_sd_ok = ok;
+        xSemaphoreGive(g_sdMutex);
+    }
+    Serial.println(ok ? "[LOG] SD-Remount OK" : "[LOG] SD-Remount fehlgeschlagen");
+    return ok;
 }
 
 bool logger_sd_available() { return s_sd_ok; }
@@ -220,27 +251,38 @@ void logger_append() {
 // ── SD-Batch schreiben ────────────────────────────────────────
 void logger_flush_sd() {
     clock_persist();
-    if (!s_sd_ok) return;
+
+    // B-15: SD zur Laufzeit weg? Alle 60 s Remount versuchen, sonst raus.
+    if (!s_sd_ok) {
+        if ((uint32_t)(millis() - s_sdRetryMs) >= 60000) {
+            s_sdRetryMs = millis();
+            sd_try_remount();
+        }
+        return;
+    }
 
     bool due  = (uint32_t)(millis() - s_lastFlushMs) >= g_params.logIntervalMs;
     bool full = (s_rowCount >= MIN_ROWS_MAX);
     if (!due && !full) return;
 
-    LogEntry local[MIN_ROWS_MAX];
     uint8_t  n = 0;
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return;
     n = s_rowCount;
-    if (n) memcpy(local, s_rows, n * sizeof(LogEntry));
+    if (n) memcpy(s_flushBuf, s_rows, n * sizeof(LogEntry));   // K-4: Off-Stack
     s_rowCount = 0;
     xSemaphoreGive(s_mutex);
 
     s_lastFlushMs = millis();
     if (n == 0) return;
 
-    // SD-Mutex für ganzen Batch halten (write_row_to_sd braucht es)
+    // SD-Mutex für den ganzen Batch halten (write_batch_to_sd braucht es).
     if (xSemaphoreTake(g_sdMutex, pdMS_TO_TICKS(500)) == pdTRUE) {
-        write_batch_to_sd(local, n);
+        bool ok = write_batch_to_sd(s_flushBuf, n);
         xSemaphoreGive(g_sdMutex);
+        if (!ok) {                       // B-15: Schreibfehler → Remount anstoßen
+            s_sd_ok     = false;
+            s_sdRetryMs = millis();
+        }
     } else {
         Serial.println("[LOG] SD-Mutex Timeout — Batch verworfen");
     }
@@ -254,27 +296,27 @@ void logger_emergency_back_up(const char* reason) {
         return;
     }
 
-    LogEntry local[MIN_ROWS_MAX];
     uint8_t  n = 0;
 
-    // Timeout-Variante: Bei Mutex-Blockade trotzdem fortfahren
+    // Timeout-Variante: Bei Mutex-Blockade trotzdem fortfahren.
+    // K-4: s_emergBuf (Off-Stack), eigener Puffer nur für diesen wdt_task-Pfad.
     if (xSemaphoreTake(s_mutex, pdMS_TO_TICKS(30)) == pdTRUE) {
         finalize_minute_locked();
         n = s_rowCount;
-        if (n) memcpy(local, s_rows, n * sizeof(LogEntry));
+        if (n) memcpy(s_emergBuf, s_rows, n * sizeof(LogEntry));
         s_rowCount = 0;
         xSemaphoreGive(s_mutex);
     } else {
         // Mutex nicht bekommen — rohen Zeiger-Zustand lesen (best-effort)
         n = s_rowCount;
         if (n > MIN_ROWS_MAX) n = MIN_ROWS_MAX;
-        if (n) memcpy(local, s_rows, n * sizeof(LogEntry));
+        if (n) memcpy(s_emergBuf, s_rows, n * sizeof(LogEntry));
         s_rowCount = 0;
     }
 
     // SD-Mutex mit Timeout — notfalls proceed anyway (Watchdog läuft ab!)
     bool sd_ok = (xSemaphoreTake(g_sdMutex, pdMS_TO_TICKS(500)) == pdTRUE);
-    if (n) write_batch_to_sd(local, n);
+    if (n) write_batch_to_sd(s_emergBuf, n);
     File f = SD.open("/crash.log", FILE_APPEND);
     if (f) {
         f.printf("ts=%lu reason=%s rows=%u\n",

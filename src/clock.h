@@ -1,5 +1,5 @@
 // ============================================================
-//  clock.h — Womo Energy Core v5.1
+//  clock.h — Womo Energy Core v5.4
 //  Zeitbasis: DS3231 RTC (führend) + esp_timer_get_time() (Laufzeit).
 //             Fallback NVS/Build, wenn DS3231 fehlt/OSF gesetzt.
 //             24h-Resync gegen DS3231 bei UTC-Tageswechsel.

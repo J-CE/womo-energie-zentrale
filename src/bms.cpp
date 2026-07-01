@@ -1,6 +1,12 @@
 // ============================================================
-//  bms.cpp — Womo Energy Core v5.0
-//  JK-BMS RS485 Parser (4E-57-Frame)
+//  bms.cpp — Womo Energy Core v5.4
+//  JK-BMS UART-Parser (4E-57-Frame, direkt per TTL am GPS-Port)
+//
+//  v5.4: GPIO_RS485_DE_RE (MAX485-Richtungssteuerung) entfernt —
+//  seit der Umstellung auf direkte TTL-Verdrahtung am GPS-Port
+//  (kein MAX485 im Pfad, siehe Anschluss_Anleitung.txt Modul 2)
+//  war das Togglen von GPIO 15 nur noch totes Legacy-Verhalten
+//  auf einem freien Pin.
 //
 //  v5.0: Reduzierter Datensatz — Zellspannungen (0x79) werden
 //  korrekt geparst (Parser-Sync!), aber nicht gespeichert.
@@ -126,6 +132,7 @@ static bool parse_frame(const uint8_t* buf, uint16_t len) {
     int dlen = endIdx - 11;
     int pos  = 0;
     bool desync = false;
+    int  bad_id = -1;   // K-1: Serial-Ausgabe NICHT unter g_bmsMutex — hier nur merken
 
     while (pos < dlen) {
         uint8_t id = data[pos++];
@@ -141,7 +148,7 @@ static bool parse_frame(const uint8_t* buf, uint16_t len) {
 
         int plen = id_payload_len(id);
         if (plen < 0 || pos + plen > dlen) {
-            Serial.printf("[BMS] Unbekannte/korrupte ID 0x%02X — Rest verworfen\n", id);
+            bad_id = id;
             desync = true;
             break;
         }
@@ -173,6 +180,10 @@ static bool parse_frame(const uint8_t* buf, uint16_t len) {
     if (desync) g_bms.errorCount++;
 
     xSemaphoreGive(g_bmsMutex);
+    // K-1: erst NACH Freigabe loggen — Serial (USB-CDC) könnte blockieren.
+    if (bad_id >= 0)
+        Serial.printf("[BMS] Unbekannte/korrupte ID 0x%02X — Rest verworfen\n",
+                      (unsigned)bad_id);
     return true;
 }
 
@@ -193,8 +204,6 @@ static void align_to_header() {
 void bms_init() {
     g_bmsMutex = xSemaphoreCreateMutex();
     memset(&g_bms, 0, sizeof(g_bms));
-    pinMode(GPIO_RS485_DE_RE, OUTPUT);
-    digitalWrite(GPIO_RS485_DE_RE, LOW);
     BMS_Serial.begin(UART_BMS_BAUD, SERIAL_8N1, UART_BMS_RX, UART_BMS_TX);
     Serial.println("[BMS] RX=" + String(UART_BMS_RX) + " TX=" + String(UART_BMS_TX));
 }
@@ -202,10 +211,8 @@ void bms_init() {
 bool bms_poll() {
     while (BMS_Serial.available()) BMS_Serial.read();
     rx_len = 0;
-    digitalWrite(GPIO_RS485_DE_RE, HIGH);
     BMS_Serial.write(BMS_QUERY, sizeof(BMS_QUERY));
     BMS_Serial.flush();
-    digitalWrite(GPIO_RS485_DE_RE, LOW);
 
     const uint32_t start    = millis();
     uint32_t       lastByte = start;

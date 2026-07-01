@@ -1,5 +1,5 @@
 // ============================================================
-//  io.cpp — Womo Energy Core v5.1
+//  io.cpp — Womo Energy Core v5.4
 //  GPIO-Treiber für alle Aktoren und Sensoren
 //
 //  Alle Ausgänge werden in io_init() explizit LOW gesetzt

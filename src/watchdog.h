@@ -1,5 +1,5 @@
 // ============================================================
-//  watchdog.h — Womo Energy Core v5.0
+//  watchdog.h — Womo Energy Core v5.4
 //  Zweistufiger Watchdog-Mechanismus
 //
 //  Stufe 1: HW-WDT (esp_task_wdt, 4s) — überwacht loop()

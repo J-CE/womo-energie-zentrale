@@ -1,5 +1,5 @@
 // ============================================================
-//  clock.cpp — Womo Energy Core v5.1
+//  clock.cpp — Womo Energy Core v5.4
 //
 //  Zeitquelle-Hierarchie beim Boot:
 //    1) DS3231 RTC (I2C, GPIO 1/2) — batteriegepuffert, genau
@@ -260,20 +260,38 @@ bool clock_set_epoch(uint32_t epoch) {
         Serial.printf("[CLOCK] Abgelehnt: epoch=%lu\n", (unsigned long)epoch);
         return false;
     }
-    set_base_from_epoch(epoch);
+
+    // B-18: Hysterese gegen Flash-Verschleiß + unnötige I2C-Writes.
+    // Das Dashboard synct alle 5 min pro Client — ohne Hysterese wäre das
+    // ein NVS-Write + DS3231-Write je Sync. Nur bei relevanter Abweichung
+    // die Hardware-Uhr stellen und nur mit throttled Persistenz schreiben.
+    int32_t devSec = (int32_t)(epoch - clock_now());   // + = Browser voraus
+    bool    significant = (devSec > 5 || devSec < -5);
+
+    if (significant) {
+        set_base_from_epoch(epoch);
+        // Kann aus dem AsyncTCP-Handler (/api/time) kommen → Bus-Mutex Pflicht.
+        if (g_i2cMutex && xSemaphoreTake(g_i2cMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            ds3231_write_epoch(epoch);        // Hardware-Uhr stellen
+            xSemaphoreGive(g_i2cMutex);
+        }
+    }
     s_hasTime = true;
     s_synced  = true;
-    cprefs.putULong("epoch", epoch);
-    s_lastPersistEpoch = epoch;
-    // Kann aus dem AsyncTCP-Handler (/api/time) kommen → Bus-Mutex Pflicht.
-    if (g_i2cMutex && xSemaphoreTake(g_i2cMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        ds3231_write_epoch(epoch);        // Hardware-Uhr stellen
-        xSemaphoreGive(g_i2cMutex);
+
+    // NVS-Persistenz gedrosselt (analog clock_persist): nur wenn seit der
+    // letzten Persistenz >10 min vergangen sind bzw. die Zeit rückwärts sprang.
+    int32_t pdiff = (int32_t)(epoch - s_lastPersistEpoch);
+    if (pdiff > 600 || pdiff < -60) {
+        cprefs.putULong("epoch", epoch);
+        s_lastPersistEpoch = epoch;
     }
+
     s_lastResyncDay = clock_now() / 86400UL;  // heute (UTC) kein Resync mehr
-    Serial.printf("[CLOCK] Sync UTC=%lu lokal=%lu\n",
+    Serial.printf("[CLOCK] Sync UTC=%lu lokal=%lu (dev=%lds, %s)\n",
                   (unsigned long)epoch,
-                  (unsigned long)(epoch + clock_local_offset_at(epoch)));
+                  (unsigned long)(epoch + clock_local_offset_at(epoch)),
+                  (long)devSec, significant ? "gestellt" : "unverändert");
     return true;
 }
 

@@ -1,5 +1,5 @@
 // ============================================================
-//  watchdog.cpp — Womo Energy Core v5.0
+//  watchdog.cpp — Womo Energy Core v5.4
 //  Software-Watchdog: Modul-Liveness-Überwachung
 //
 //  Überwachte Module: WDT_BMS (6s), WDT_MPPT (6s), WDT_LOGGER (10s)
@@ -118,6 +118,9 @@ void watchdog_init() {
         errorStart[i] = now;
     }
 
-    xTaskCreatePinnedToCore(watchdog_task, "wdt_task", 4096, NULL, 1, NULL, 0);
+    // K-4: 6144 statt 4096 — logger_emergency_back_up() läuft in diesem Task
+    // und ruft die tiefe SD-Schreibkette auf (Off-Stack-Puffer allein reicht
+    // als Reserve nicht sicher im Reboot-Moment).
+    xTaskCreatePinnedToCore(watchdog_task, "wdt_task", 6144, NULL, 1, NULL, 0);
     Serial.println(F("[WATCHDOG] Software-Modulüberwachung aktiv + HW-WDT auf loop()."));
 }
