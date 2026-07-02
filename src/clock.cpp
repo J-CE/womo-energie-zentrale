@@ -281,11 +281,15 @@ bool clock_set_epoch(uint32_t epoch) {
 
     // NVS-Persistenz gedrosselt (analog clock_persist): nur wenn seit der
     // letzten Persistenz >10 min vergangen sind bzw. die Zeit rückwärts sprang.
-    int32_t pdiff = (int32_t)(epoch - s_lastPersistEpoch);
-    if (pdiff > 600 || pdiff < -60) {
-        cprefs.putULong("epoch", epoch);
-        s_lastPersistEpoch = epoch;
+    // F-11: Entscheidung + Update atomar; NVS-Write außerhalb des Spinlocks.
+    bool doPersist = false;
+    taskENTER_CRITICAL(&s_clock_mux);
+    {
+        int32_t pdiff = (int32_t)(epoch - s_lastPersistEpoch);
+        if (pdiff > 600 || pdiff < -60) { doPersist = true; s_lastPersistEpoch = epoch; }
     }
+    taskEXIT_CRITICAL(&s_clock_mux);
+    if (doPersist) cprefs.putULong("epoch", epoch);
 
     s_lastResyncDay = clock_now() / 86400UL;  // heute (UTC) kein Resync mehr
     Serial.printf("[CLOCK] Sync UTC=%lu lokal=%lu (dev=%lds, %s)\n",
@@ -392,12 +396,20 @@ void clock_persist(bool force) {
         rtc_health_update();
     }
     uint32_t now_epoch = clock_now();
+    // F-11: Entscheidung + s_lastPersistEpoch-Update atomar — sonst Race zwischen
+    // logger_task (hier) und AsyncTCP (clock_set_epoch), die beide dieselbe
+    // Throttle-Variable read-modify-write'en. NVS-Write bleibt AUSSERHALB des
+    // Spinlocks (Flash-Zugriff nie unter taskENTER_CRITICAL).
+    bool doWrite = force;
+    taskENTER_CRITICAL(&s_clock_mux);
     if (!force) {
         int32_t diff = (int32_t)(now_epoch - s_lastPersistEpoch);
-        if (diff < 600 && diff > -60) return;
+        if (!(diff < 600 && diff > -60)) doWrite = true;
     }
+    if (doWrite) s_lastPersistEpoch = now_epoch;
+    taskEXIT_CRITICAL(&s_clock_mux);
+    if (!doWrite) return;
     cprefs.putULong("epoch", now_epoch);
-    s_lastPersistEpoch = now_epoch;
 }
 
 // ── RTC-Status als JSON-Fragment (nur Cache, kein I2C) ────────

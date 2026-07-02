@@ -5,7 +5,7 @@
 //  LogEntry:  __attribute__((packed)), exakt 32 Bytes
 //             static_assert(sizeof(LogEntry) == 32) aktiv
 //  Ringpuffer:Alle 2s (logger_append), SD-Flush alle 5s
-//  SD-Dateien:/log_NNNNN.csv (NNNNN = Tage seit 1970 in MEZ)
+//  SD-Dateien:/log_NNNNN.csv (NNNNN = Tage seit 1970 in UTC, DST-stabil)
 //  CSV-Header: ts,v,i,soc,t_mos,t_s1,t_s2,t_mos2,...
 //  g_sdMutex: schützt alle SD-Zugriffe (logger + http_server)
 // ============================================================

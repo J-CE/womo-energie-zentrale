@@ -23,6 +23,7 @@
 #include <LittleFS.h>
 #include <SD.h>
 #include <Preferences.h>
+#include <memory>       // std::shared_ptr — Lebensdauer der Chunked-Stream-Puffer (H-3)
 
 static AsyncWebServer server(WEBSERVER_PORT);
 static AsyncWebSocket ws("/ws");
@@ -129,6 +130,48 @@ static char* collect_body_chunk(AsyncWebServerRequest* req,
     req->_tempObject = nullptr;
     body[total] = '\0';
     return body;
+}
+
+// ── H-2: Leerer POST (Content-Length 0) → definierte 400-Antwort ──────
+// AsyncWebServer ruft bei leerem Body NUR onRequest (nicht den Body-Callback,
+// in dem sonst req->send() steckt) → sonst bliebe der Request unbeantwortet
+// hängen (DoS-Vektor). Guard läuft als onRequest ALLER POST-Routen: bei Body
+// (contentLength>0) hat der Body-Handler bereits geantwortet → hier No-Op;
+// nur bei Content-Length==0 antworten wir. Bewusst über contentLength(),
+// NICHT über _tempObject (ist im Erfolgsfall bereits nullptr).
+static void post_empty_guard(AsyncWebServerRequest* req) {
+    if (req->contentLength() == 0)
+        req->send(400, "application/json", "{\"error\":\"leerer Body\"}");
+}
+
+// ── H-3: Antwort aus einem PSRAM-Puffer chunked streamen ──────────────
+// Ersetzt beginResponseStream() für große Antworten (/api/buffer, /api/sddata):
+// beginResponseStream puffert die KOMPLETTE Antwort (~120–440 KB) im internen
+// Heap → OOM-Reboot. Hier liegt die fertig serialisierte JSON in PSRAM; der
+// Filler kopiert nur ein Fenster [index, index+maxLen) je AsyncTCP-Tick heraus
+// (kein großer Internal-RAM-Puffer). Der Puffer wird per shared_ptr an die
+// Response gebunden → Freigabe erfolgt automatisch bei Abschluss ODER
+// Client-Disconnect (kein Leak). `buf` MUSS mit malloc/ps_malloc alloziert sein.
+struct PsStreamBuf {
+    char*  data;
+    size_t len;
+    ~PsStreamBuf() { if (data) free(data); }
+};
+static void send_psram_json(AsyncWebServerRequest* req, char* buf, size_t len) {
+    if (!buf) { req->send(503, "application/json", "{\"error\":\"OOM PSRAM\"}"); return; }
+    auto st = std::make_shared<PsStreamBuf>();
+    st->data = buf;
+    st->len  = len;
+    AsyncWebServerResponse* resp = req->beginChunkedResponse("application/json",
+        [st](uint8_t* out, size_t maxLen, size_t index) -> size_t {
+            if (index >= st->len) return 0;              // fertig
+            size_t take = st->len - index;
+            if (take > maxLen) take = maxLen;
+            memcpy(out, st->data + index, take);
+            return take;
+        });
+    if (!resp) { req->send(503, "application/json", "{\"error\":\"OOM Response\"}"); return; }
+    req->send(resp);
 }
 
 static void handle_live(AsyncWebServerRequest* req) {
@@ -371,29 +414,44 @@ static void handle_buffer(AsyncWebServerRequest* req) {
     if (!entries) { req->send(503,"application/json","{\"error\":\"OOM PSRAM\"}"); return; }
     uint32_t n = logger_snapshot(offset, count, step, entries);
 
-    AsyncResponseStream* resp = req->beginResponseStream("application/json");
-    resp->print("[");
-    char tmp[220];
+    // H-3: JSON komplett in PSRAM aufbauen (nicht in den Internal-RAM-Stream),
+    // danach chunked streamen. ~240 B/Eintrag reichlich bemessen.
+    size_t cap = (size_t)n * 240 + 16;
+    char*  out = (char*)ps_malloc(cap);
+    if (!out) { free(entries); req->send(503,"application/json","{\"error\":\"OOM PSRAM\"}"); return; }
+
+    size_t off = 0;
+    out[off++] = '[';
+    // F-18: clock_local_offset_at() (gmtime_r+mktime) ist teuer und wurde pro
+    // Eintrag (~700–900×) im AsyncTCP-Task aufgerufen. Der lokale Offset ist
+    // innerhalb einer UTC-Stunde konstant; DST-Wechsel liegen exakt auf
+    // Stundengrenzen → Cache pro UTC-Stunde ist korrekt und spart ~mktime/Eintrag.
+    int32_t  offCache = 0;
+    uint32_t offHour  = 0xFFFFFFFFUL;
     for (uint32_t i = 0; i < n; i++) {
         const LogEntry& e = entries[i];
-        snprintf(tmp, sizeof(tmp),
+        uint32_t hour = e.timestamp / 3600UL;
+        if (hour != offHour) { offCache = clock_local_offset_at(e.timestamp); offHour = hour; }
+        int w = snprintf(out + off, cap - off,
             "%s{\"ts\":%lu,\"ts_mez\":%lu,\"v\":%.2f,\"i\":%.1f,\"soc\":%d,"
             "\"tt\":%d,\"ts1\":%d,\"ts2\":%d,\"tmos\":%d,"
             "\"rem\":%.1f,\"ppv\":%d,\"vpv\":%.1f,\"ipv\":%.2f,"
             "\"cs\":%d,\"err\":%d,\"fl\":%d}",
             i?",":"",
             (unsigned long)e.timestamp,
-            (unsigned long)(e.timestamp + clock_local_offset_at(e.timestamp)),
+            (unsigned long)(e.timestamp + offCache),
             e.bmsVoltage/100.0f, e.bmsCurrent/10.0f, e.soc,
             e.tempTube, e.tempSensor1, e.tempSensor2, e.tempMOS,
             e.remainAh10/10.0f, e.pvPower,
             e.pvVoltage10/10.0f, e.pvCurrent100/100.0f,
             e.mpptState, e.mpptError, e.flags);
-        resp->print(tmp);
+        if (w < 0 || (size_t)w >= cap - off) break;   // Schutz (sollte nie greifen)
+        off += (size_t)w;
     }
-    resp->print("]");
     free(entries);
-    req->send(resp);
+    if (off + 2 <= cap) out[off++] = ']';
+    // Chunked aus PSRAM streamen; send_psram_json übernimmt free(out) via shared_ptr.
+    send_psram_json(req, out, off);
 }
 
 static void handle_sdfiles(AsyncWebServerRequest* req) {
@@ -441,16 +499,25 @@ static void handle_sddata(AsyncWebServerRequest* req) {
     if (file.length() < 2 || file[0] != '/' || file.indexOf("..") >= 0) {
         req->send(400,"application/json","{\"error\":\"Ungültiger Pfad\"}"); return;
     }
+    // H-3: Zeilen unter g_sdMutex in einen PSRAM-Puffer serialisieren, dann
+    // Mutex + Datei freigeben und aus PSRAM chunked streamen. Kein
+    // Internal-RAM-Response-Puffer mehr (vermeidet OOM bei limit=2000).
+    size_t cap = (size_t)limit * 120 + 16;
+    char*  out = (char*)ps_malloc(cap);
+    if (!out) { req->send(503,"application/json","{\"error\":\"OOM PSRAM\"}"); return; }
+
     if (xSemaphoreTake(g_sdMutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+        free(out);
         req->send(503,"application/json","{\"error\":\"SD belegt\"}"); return;
     }
     File f = SD.open(file.c_str(), FILE_READ);
     if (!f) {
         xSemaphoreGive(g_sdMutex);
+        free(out);
         req->send(404,"application/json","{\"error\":\"Datei nicht gefunden\"}"); return;
     }
-    AsyncResponseStream* resp = req->beginResponseStream("application/json");
-    resp->print("[");
+    size_t off = 0;
+    out[off++] = '[';
     bool first = true;
     uint32_t line_nr = 0, added = 0;
     char line[256];
@@ -473,18 +540,18 @@ static void handle_sddata(AsyncWebServerRequest* req) {
         while (*p && col < 20) { if (*p == ',') { *p = '\0'; cols[col++] = p+1; } p++; }
         if (col < 12) continue;
         if (atol(cols[0]) <= 0) continue;
-        char entry[128];
-        snprintf(entry, sizeof(entry),
+        int w = snprintf(out + off, cap - off,
             "%s{\"ts\":%s,\"v\":%s,\"i\":%s,\"soc\":%s,\"ppv\":%s}",
             first?"":"," , cols[0],cols[1],cols[2],cols[3],cols[11]);
-        resp->print(entry);
+        if (w < 0 || (size_t)w >= cap - off) break;   // Puffer voll → sauber stoppen
+        off += (size_t)w;
         first = false;
         added++;
     }
     f.close();
     xSemaphoreGive(g_sdMutex);
-    resp->print("]");
-    req->send(resp);
+    if (off + 2 <= cap) out[off++] = ']';
+    send_psram_json(req, out, off);   // übernimmt free(out) via shared_ptr
 }
 
 void webserver_init() {
@@ -505,26 +572,26 @@ void webserver_init() {
     server.on("/api/params",  HTTP_GET,  handle_params_get);
     server.on("/api/reset",   HTTP_POST, handle_reset);
     server.on("/api/manual", HTTP_POST,
-        [](AsyncWebServerRequest* r){}, nullptr, handle_manual_post);
+        post_empty_guard, nullptr, handle_manual_post);
     server.on("/api/buffer",  HTTP_GET,  handle_buffer);
     server.on("/api/sdfiles", HTTP_GET,  handle_sdfiles);
     server.on("/api/sddata",  HTTP_GET,  handle_sddata);
     server.on("/api/params", HTTP_POST,
-        [](AsyncWebServerRequest* r){}, nullptr, handle_params_post);
+        post_empty_guard, nullptr, handle_params_post);
     server.on("/api/time", HTTP_POST,
-        [](AsyncWebServerRequest* r){}, nullptr, handle_time);
+        post_empty_guard, nullptr, handle_time);
     server.on("/api/tz",      HTTP_GET,  handle_tz_get);
     server.on("/api/tz", HTTP_POST,
-        [](AsyncWebServerRequest* r){}, nullptr, handle_tz_post);
+        post_empty_guard, nullptr, handle_tz_post);
     server.on("/api/wifi",    HTTP_GET,  handle_wifi_get);
     server.on("/api/wifi", HTTP_POST,
-        [](AsyncWebServerRequest* r){}, nullptr, handle_wifi_post);
+        post_empty_guard, nullptr, handle_wifi_post);
     server.on("/api/level",      HTTP_GET,  handle_level_get);
     server.on("/api/levelcfg",   HTTP_GET,  handle_levelcfg_get);
     server.on("/api/levelcfg", HTTP_POST,
-        [](AsyncWebServerRequest* r){}, nullptr, handle_levelcfg_post);
+        post_empty_guard, nullptr, handle_levelcfg_post);
     server.on("/api/levelcalib", HTTP_POST,
-        [](AsyncWebServerRequest* r){}, nullptr, handle_levelcalib_post);
+        post_empty_guard, nullptr, handle_levelcalib_post);
 
     // Statischer Catch-all ZULETZT — sonst fängt er /api/* ab
     server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
@@ -547,14 +614,16 @@ void webserver_broadcast() {
     if (ws.count() == 0) return;
     String json = build_live_json();
 
-    // K-2: NICHT ws.textAll() aus diesem Task (ws_task, Core 0) — das iteriert
-    // die Client-Liste, die der AsyncTCP-Task bei Connect/Disconnect verändert
-    // → Use-after-free, wenn sich ein Client während des Broadcasts trennt.
-    // Stattdessen je Client prüfen (verbunden + Sende-Queue frei) und einzeln
-    // senden. Reduziert das Race-Fenster deutlich und liefert Backpressure.
-    // Restrisiko bleibt (echte Absicherung nur im AsyncTCP-Kontext möglich).
-    for (auto& c : ws.getClients()) {
-        if (c.status() == WS_CONNECTED && c.canSend())
-            c.text(json.c_str(), json.length());
-    }
+    // H-1: ws.textAll() iteriert die Client-Liste UNTER dem internen
+    // _ws_clients_lock (verifiziert im esp32async-Fork ^3.7.0, AsyncWebSocket.cpp:
+    // textAll() Z.1206, cleanupClients()/_addClient()/_handleDisconnect() nehmen
+    // denselben Lock). Damit ist der Broadcast aus dem ws_task race-frei gegen
+    // Connect/Disconnect im AsyncTCP-Task. Das frühere manuelle Loop über
+    // ws.getClients() iterierte die std::list OHNE diesen Lock → Iterator-
+    // Invalidierung / Use-after-free, wenn ein Client sich während des
+    // Broadcasts trennte (K-2 war damit nur teilbehoben). textAll() serialisiert
+    // die Message per ref-gezähltem SharedBuffer und liefert Backpressure über
+    // die client-eigene Sende-Queue.
+    ws.textAll(json);
+    ws.cleanupClients();   // getrennte Clients aufräumen (ebenfalls unter Lock)
 }

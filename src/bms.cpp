@@ -172,12 +172,24 @@ static bool parse_frame(const uint8_t* buf, uint16_t len) {
         pos += plen;
     }
 
-    g_bms.power = g_bms.totalVoltage * g_bms.current;
-    g_bms.remainingCapacityAh = g_bms.nominalCapacityAh * (float)g_bms.soc / 100.0f;
-    g_bms.valid        = true;
-    g_bms.lastUpdateMs = millis();
     g_bms.frameCount++;
-    if (desync) g_bms.errorCount++;
+    if (desync) {
+        // M-6: Desynchronisierter Frame → NICHT als frisch & gültig führen.
+        // Die Prüfsumme war ok (Bytes intakt), aber die TLV-Kette brach ab
+        // (unbekannte ID / Längenüberlauf) → Felder VOR dem Abbruch könnten
+        // bei fehlerhafter Längentabelle fehlinterpretiert worden sein.
+        // valid/lastUpdateMs bleiben unverändert → die Staleness-Prüfung in der
+        // Logik greift, statt potenziell falsche Werte als „gültig" zu behandeln.
+        // Ein einzelner Desync zwischen guten Frames kostet keine Frische
+        // (gute Frames setzen lastUpdateMs); dauerhafte Desyncs führen sauber
+        // in den Stale-Zustand (bms_ok=false → Fail-Safe).
+        g_bms.errorCount++;
+    } else {
+        g_bms.power = g_bms.totalVoltage * g_bms.current;
+        g_bms.remainingCapacityAh = g_bms.nominalCapacityAh * (float)g_bms.soc / 100.0f;
+        g_bms.valid        = true;
+        g_bms.lastUpdateMs = millis();
+    }
 
     xSemaphoreGive(g_bmsMutex);
     // K-1: erst NACH Freigabe loggen — Serial (USB-CDC) könnte blockieren.

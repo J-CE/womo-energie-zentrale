@@ -165,8 +165,12 @@ void logic_evaluate() {
                 if (mst.want) s_dplus_on_since = millis();
             }
             db_dplus = 0;
-            uint32_t remainS = ((uint32_t)g_params.manualTimeoutMin*60000UL
-                - (millis()-mst.lastCmdMs)) / 1000;
+            // F-07: Unterlauf vermeiden (falls elapsed die Timeout-Grenze
+            // durch die Race mit manual_check kurz überschreitet → sonst
+            // riesige „Auto in …"-Restzeit).
+            uint32_t elapsed = millis() - mst.lastCmdMs;
+            uint32_t limitMs = (uint32_t)g_params.manualTimeoutMin * 60000UL;
+            uint32_t remainS = (elapsed < limitMs) ? (limitMs - elapsed) / 1000 : 0;
             set_reason(s_reason_dplus, "MANUAL %s (Auto in %lus)",
                 mst.want?"EIN":"AUS", (unsigned long)remainS);
         } else {
@@ -180,14 +184,18 @@ void logic_evaluate() {
         if (!off && !bms_ok)   off = "BMS veraltet/ungültig";
         if (!off && !mppt_ok)  off = "MPPT Timeout";
         if (!off && landstrom) off = "Landstrom";
-        bool hard_off = (!bms_ok) || (!mppt_ok) || landstrom;   // B-11
-        // Weich (durch Mindestlaufzeit hemmbar)
+        // M-3: SoC < socDPlusOff ist laut Spezifikation HART ("AUS hart: SoC<Off",
+        // Tiefentladeschutz). Vorher war es im !min_on-Block gekapselt und damit
+        // während der 5-min-Mindestlaufzeit unwirksam bzw. nicht in der
+        // B-11-Express-Route. Jetzt sofort und min_on-unabhängig.
+        if (!off && (soc < g_params.socDPlusOff)) off = "SoC < hardOff";
+        bool hard_off = (!bms_ok) || (!mppt_ok) || landstrom
+                        || (soc < g_params.socDPlusOff);   // B-11 + M-3
+        // Weich (durch Mindestlaufzeit hemmbar): nur noch PV-schwach UND SoC<High
         bool min_on = cur && (uint32_t)(millis()-s_dplus_on_since) < LOGIC_DPLUS_MIN_ON_MS;
         if (!off && !min_on) {
-            bool soc_low = (soc < g_params.socDPlusOff);
             bool soft_off = (ppv < g_params.pvThresholdOff) && (soc < g_params.socDPlusHigh);
-            if (soc_low)         off = "SoC < hardOff";
-            else if (soft_off)   off = "PV<Off & SoC<High";
+            if (soft_off)   off = "PV<Off & SoC<High";
         }
         if (off) want = false;
 
@@ -200,19 +208,13 @@ void logic_evaluate() {
             db_dplus = 0;
             set_reason(s_reason_dplus, "AUS (hart-sofort): %s", off ? off : "Interlock");
         } else {
-        // L1-Fix: Hart-AUS wird durch min_on NICHT gehemmt (off wurde
-        // bereits oben unconditional gesetzt) — min_on beeinflusst hier
-        // nur noch den Text ("hart" vs. "folgt via Debounce").
-        //
-        // Reason-Text: Grund wird SOFORT angezeigt, sobald er feststeht —
-        // unabhängig davon, wie weit der Debounce-Zähler schon ist (der
-        // schaltet weiterhin unverändert erst nach relayDebounceCycles).
-        // v5.4-Fix: vorher verschwand ein Hart-Grund nach Ablauf der
-        // Mindestlaufzeit hinter der generischen "EIN(halte)"-Anzeige,
-        // solange der Debounce-Countdown noch lief.
-        if (off && min_on)
-            set_reason(s_reason_dplus, "AUS (hart): %s", off);
-        else if (off && cur)
+        // Reason-Text (nur Anzeige; der Debounce schaltet unverändert erst nach
+        // relayDebounceCycles). Der Fall „harter Grund + cur" wird bereits oben
+        // von der B-11/M-3-Express-Route behandelt und erreicht diesen else-Zweig
+        // NICHT — daher hier kein separater „AUS (hart)"-Zweig mehr (war nach
+        // M-3 unerreichbar). Übrig bleiben: weicher Grund via Debounce, sowie
+        // die regulären EIN/AUS-Anzeigen.
+        if (off && cur)
             set_reason(s_reason_dplus, "AUS folgt (Debounce): %s", off);
         else if (!want && !cur)
             set_reason(s_reason_dplus, "AUS: %s", off ? off : "EIN-Bed. nicht erfüllt");

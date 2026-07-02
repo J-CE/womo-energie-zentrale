@@ -24,6 +24,27 @@ static void _write_defaults() {
     prefs.putUChar ("manualTOMin",   DEFAULT_MANUAL_TIMEOUT_MIN);
 }
 
+// M-5: Bereichsgrenzen (identisch zu den Settern) — für Ladepfad-Validierung
+static inline uint8_t  _clu8 (uint8_t  v, uint8_t  lo, uint8_t  hi){ return v<lo?lo:(v>hi?hi:v); }
+static inline uint16_t _clu16(uint16_t v, uint16_t lo, uint16_t hi){ return v<lo?lo:(v>hi?hi:v); }
+static inline uint32_t _clu32(uint32_t v, uint32_t lo, uint32_t hi){ return v<lo?lo:(v>hi?hi:v); }
+
+static void _clamp_loaded() {
+    g_params.socDPlusOn          = _clu8 (g_params.socDPlusOn,          50, 100);
+    g_params.socDPlusOff         = _clu8 (g_params.socDPlusOff,         20,  99);
+    g_params.socDPlusHigh        = _clu8 (g_params.socDPlusHigh,        50, 100);
+    g_params.pvThresholdOn       = _clu16(g_params.pvThresholdOn,       10, 2000);
+    g_params.pvThresholdOff      = _clu16(g_params.pvThresholdOff,       0, 2000);
+    g_params.socGelOn            = _clu8 (g_params.socGelOn,            50, 100);
+    g_params.socGelHigh          = _clu8 (g_params.socGelHigh,          50, 100);
+    g_params.pvGelMinW           = _clu16(g_params.pvGelMinW,            0,  500);
+    g_params.socWROn             = _clu8 (g_params.socWROn,             50, 100);
+    g_params.socWROff            = _clu8 (g_params.socWROff,            20,  99);
+    g_params.relayDebounceCycles = _clu8 (g_params.relayDebounceCycles,  1,   60);
+    g_params.logIntervalMs       = _clu32(g_params.logIntervalMs,   60000, 3600000);
+    g_params.manualTimeoutMin    = _clu8 (g_params.manualTimeoutMin,     1,  240);
+}
+
 static void _load_from_nvs() {
     g_params.socDPlusOn          = prefs.getUChar ("socDPlusOn",    DEFAULT_SOC_D_PLUS_ON);
     g_params.socDPlusOff         = prefs.getUChar ("socDPlusOff",   DEFAULT_SOC_D_PLUS_OFF);
@@ -38,6 +59,14 @@ static void _load_from_nvs() {
     g_params.relayDebounceCycles = prefs.getUChar ("debounceCyc",   DEFAULT_RELAY_DEBOUNCE_CYCLES);
     g_params.logIntervalMs       = prefs.getULong ("logIntervalMs", DEFAULT_LOG_INTERVAL_MS);
     g_params.manualTimeoutMin    = prefs.getUChar ("manualTOMin",   DEFAULT_MANUAL_TIMEOUT_MIN);
+
+    // M-5: NVS-Werte gegen die Setter-Grenzen clampen. Der Ladepfad übernahm
+    // bisher JEDEN gespeicherten Wert ungeprüft — ein durch FW-Wechsel oder
+    // Flash-Bitfehler entstandener Ausreißer (z. B. debounceCyc>127) landete
+    // dann in g_params. Kritisch bei relayDebounceCycles: der (int8_t)-Cast in
+    // logic.cpp::debounce() würde bei >127 negativ → Debounce wirkungslos,
+    // Relais-Flattern. Clamp erzwingt gültige Bereiche identisch zu den Settern.
+    _clamp_loaded();
 }
 
 void params_init() {

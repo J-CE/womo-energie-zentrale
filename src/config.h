@@ -89,7 +89,7 @@
 #define LEVEL_I2C_ADDR_PRIMARY      0x1D        // SA0=1 (Default-Breakout)
 #define LEVEL_I2C_ADDR_ALT          0x1C        // SA0=0
 #define LEVEL_POLL_INTERVAL_MS      250         // 4 Hz — flüssiges Leveling
-#define LEVEL_TOLERANCE_DEG         0.3f        // |roll|,|pitch| darunter = eben
+#define LEVEL_TOLERANCE_DEG         1.2f        // |roll|,|pitch| darunter = eben
 
 // ── Digitale Eingänge ────────────────────────────────────────
 #define GPIO_LANDSTROM_SENSOR       18          // INPUT, Spannungsteiler 2k/1,5k von 5V, HIGH = Landstrom

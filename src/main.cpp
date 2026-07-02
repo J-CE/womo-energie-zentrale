@@ -100,6 +100,19 @@ static void ws_task(void*) {
     }
 }
 
+// ── Task-Erzeugung mit Rückgabeprüfung ───────────────────────
+// Ein fehlgeschlagenes xTaskCreatePinnedToCore (i.d.R. Heap-Mangel für den
+// Stack) ist deterministisch: es scheitert bei jedem Boot gleich. Daher KEIN
+// abort()/restart() (→ Boot-Loop, remote nicht diagnostizierbar), sondern laut
+// loggen und weiterlaufen — der Webserver kommt hoch, der Fehler ist sichtbar.
+static bool start_task(BaseType_t rc, const char* name) {
+    if (rc != pdPASS) {
+        Serial.printf("[MAIN] FEHLER: Task '%s' nicht erstellt (Heap?)\n", name);
+        return false;
+    }
+    return true;
+}
+
 void setup() {
     Serial.begin(SERIAL_BAUD);
     // K-1: USB-CDC verwirft TX-Daten statt zu blockieren, wenn kein Host
@@ -126,13 +139,23 @@ void setup() {
     level_init();         // Lagesensor (optional) — nach clock_init: Wire + g_i2cMutex bereit
     webserver_init();
 
-    xTaskCreatePinnedToCore(logic_task,  "logic",  8192, nullptr, 4, &h_logic,  1);
-    xTaskCreatePinnedToCore(mppt_task,   "mppt",   4096, nullptr, 3, &h_mppt,   1);
-    xTaskCreatePinnedToCore(logger_task, "logger", 6144, nullptr, 2, &h_logger, 0);  // K-4: SD-Aufrufkette tief
-    xTaskCreatePinnedToCore(ws_task,     "ws",     4096, nullptr, 2, &h_ws,     0);
-    xTaskCreatePinnedToCore(level_task,  "level",  4096, nullptr, 1, &h_level,  0);
+    // F-01: Rückgabe jeder Task-Erzeugung prüfen. Alle Creates werden versucht
+    // (kein Short-Circuit), damit im Fehlerfall ALLE Ausfälle sichtbar werden.
+    bool tasks_ok = true;
+    tasks_ok &= start_task(xTaskCreatePinnedToCore(logic_task,  "logic",  8192, nullptr, 4, &h_logic,  1), "logic");
+    tasks_ok &= start_task(xTaskCreatePinnedToCore(mppt_task,   "mppt",   4096, nullptr, 3, &h_mppt,   1), "mppt");
+    tasks_ok &= start_task(xTaskCreatePinnedToCore(logger_task, "logger", 6144, nullptr, 2, &h_logger, 0), "logger");  // K-4: SD-Aufrufkette tief
+    tasks_ok &= start_task(xTaskCreatePinnedToCore(ws_task,     "ws",     4096, nullptr, 2, &h_ws,     0), "ws");
+    tasks_ok &= start_task(xTaskCreatePinnedToCore(level_task,  "level",  4096, nullptr, 1, &h_level,  0), "level");
+    if (!tasks_ok)
+        Serial.println("[MAIN] WARNUNG: Nicht alle Tasks gestartet — System läuft eingeschränkt.");
 
-    esp_task_wdt_init(WDT_TIMEOUT_MS / 1000, true);
+    // F-01: Rückgabe prüfen. Auf Arduino-Core 2.x kann der TWDT bereits vom
+    // Core initialisiert sein → esp_task_wdt_init liefert dann ESP_ERR_INVALID_STATE
+    // (Timeout wird NICHT rekonfiguriert). Das ist tolerierbar, aber sichtbar loggen.
+    esp_err_t wdtErr = esp_task_wdt_init(WDT_TIMEOUT_MS / 1000, true);
+    if (wdtErr != ESP_OK && wdtErr != ESP_ERR_INVALID_STATE)
+        Serial.printf("[MAIN] esp_task_wdt_init: %s\n", esp_err_to_name(wdtErr));
     esp_task_wdt_add(nullptr);
     watchdog_init();
 

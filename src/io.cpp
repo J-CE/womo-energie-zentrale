@@ -216,7 +216,10 @@ void io_all_safe() {
 }
 
 String io_to_json() {
-    io_read_landstrom();
+    // F-04: KEIN io_read_landstrom() hier — das schrieb g_io.landstrom aus dem
+    // AsyncTCP-Kontext, parallel zum autoritativen Read in logic_evaluate
+    // (logic_task, alle 2 s). Für die Anzeige genügt der von logic_task
+    // gepflegte Cache-Wert (≤2 s alt); so bleibt g_io.landstrom Single-Writer.
     uint32_t mask = g_rgbChannelMask;
     uint8_t  soc  = (mask >> RGB_SOC_SHIFT) & 0xFF;
     char buf[320];

@@ -121,6 +121,14 @@ void watchdog_init() {
     // K-4: 6144 statt 4096 — logger_emergency_back_up() läuft in diesem Task
     // und ruft die tiefe SD-Schreibkette auf (Off-Stack-Puffer allein reicht
     // als Reserve nicht sicher im Reboot-Moment).
-    xTaskCreatePinnedToCore(watchdog_task, "wdt_task", 6144, NULL, 1, NULL, 0);
+    // F-01: Erzeugung prüfen. Schlägt sie fehl, gibt es KEINE SW-Überwachung —
+    // die "aktiv"-Meldung darf das dann nicht behaupten. Der HW-WDT auf loop()
+    // (in main.cpp) bleibt als letzte Instanz aktiv.
+    BaseType_t rc = xTaskCreatePinnedToCore(watchdog_task, "wdt_task", 6144, NULL, 1, NULL, 0);
+    if (rc != pdPASS) {
+        Serial.println(F("[WATCHDOG] FEHLER: watchdog_task nicht erstellt — "
+                         "KEINE SW-Modulüberwachung! (nur HW-WDT auf loop())"));
+        return;
+    }
     Serial.println(F("[WATCHDOG] Software-Modulüberwachung aktiv + HW-WDT auf loop()."));
 }

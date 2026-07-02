@@ -36,10 +36,22 @@ static char    keys  [MAX_FIELDS][12];   // Doku: max 9 Bytes → 12 mit Reserve
 static char    values[MAX_FIELDS][33];   // Doku: max 33 Bytes
 static uint8_t field_count = 0;
 
-// Checksummen-Akkumulator: Modulo-256 über ALLE Bytes im Block
+// Checksummen-Akkumulator: Modulo-256 über ALLE Bytes im TEXT-Block
 // Doku: "The modulo 256 sum of all bytes in a block will equal 0"
 // Wird in mppt_poll() pro Byte accumul., in commit_block() validiert.
 static uint8_t s_block_sum = 0;
+
+// M-1: VE.Direct verschachtelt asynchrone Text-Frames mit HEX-Antwort-Frames
+// (':' … '\n'), die der MPPT auf unsere HEX-SET-Kommandos (Temp-TX, alle 10s)
+// schickt. Diese HEX-Bytes gehören NICHT zur Modulo-256-Text-Checksumme und
+// sind keine Text-Zeilen. Ohne Ausblendung verfälscht jede HEX-Antwort die
+// Summe → der umschließende Text-Block scheitert an der Prüfsumme und wird
+// verworfen. s_hex überspringt den kompletten HEX-Frame (state-persistent über
+// mppt_poll-Aufrufe hinweg, da ein Frame über mehrere Polls gesplittet ankommen
+// kann). s_hexLen kappt einen nie terminierten HEX-Frame (verlorenes '\n' bei
+// RX-Overflow) → kein dauerhaftes Verschlucken des Text-Protokolls.
+static bool    s_hex    = false;
+static uint8_t s_hexLen = 0;
 
 static void commit_block() {
     if (field_count == 0) return;
@@ -142,6 +154,10 @@ void mppt_init() {
     g_mpptMutex = xSemaphoreCreateMutex();
     memset(&g_mppt, 0, sizeof(g_mppt));
     // UART2 bidirektional: RX=38 Text-Protokoll, TX=42 HEX-Protokoll
+    // F-09: RX-Puffer von 256 (Default) auf 512 B — bei 19200 Baud und ~100 ms
+    // Poll-Takt fallen ~192 B/Zyklus an; unter Preemption (logic_task) kann das
+    // Intervall wachsen → 256 B reichten knapp nicht. Muss VOR begin() gesetzt sein.
+    MPPT_Serial.setRxBufferSize(512);
     MPPT_Serial.begin(UART_MPPT_BAUD, SERIAL_8N1, UART_MPPT_RX, UART_MPPT_TX);
     Serial.printf("[MPPT] UART2 RX=%d TX=%d Baud=%d\n",
                   UART_MPPT_RX, UART_MPPT_TX, UART_MPPT_BAUD);
@@ -152,7 +168,15 @@ bool mppt_poll() {
     while (MPPT_Serial.available()) {
         uint8_t b = MPPT_Serial.read();
 
-        // Checksummen-Akkumulation: ALLE Bytes (inkl. \r, \n, \t)
+        // M-1: HEX-Antwort-Frame (':' am Zeilenanfang … '\n') komplett
+        // überspringen — weder in die Text-Checksumme noch in line_buf.
+        if (!s_hex && line_pos == 0 && b == ':') { s_hex = true; s_hexLen = 0; }
+        if (s_hex) {
+            if (b == '\n' || ++s_hexLen > 64) s_hex = false;  // Frame-Ende / Notbremse
+            continue;                                          // NICHT summieren/parsen
+        }
+
+        // Checksummen-Akkumulation: ALLE (Text-)Bytes (inkl. \r, \n, \t)
         s_block_sum = (uint8_t)(s_block_sum + b);
 
         if (b == '\r') continue;    // \r ignorieren (aber in Checksumme enthalten)
