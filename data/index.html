@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     index.html — Womo Energy Core v5.4
+     index.html — Womo Energy Core v5.4.1
      Dashboard: BMS · MPPT · Schaltlogik · Logging · Parameter · Zeitzone
      Eingebettet in LittleFS, erreichbar via http://192.168.4.1
      WLAN AP: GODMODULE (Passwort: BM-hy678)
@@ -137,6 +137,9 @@
   button.btn.ghost{background:transparent;color:var(--muted);border-color:var(--line2)}
   button.btn.danger{background:transparent;color:#ff9aa0;border-color:rgba(229,72,77,.5)}
   button.btn:disabled{opacity:.5;cursor:not-allowed}
+  /* OTA-Fortschritt (v5.4.1) */
+  .pbar{width:100%;height:10px;background:var(--panel2);border:1px solid var(--line2);border-radius:6px;overflow:hidden;margin-top:8px}
+  .pbar>div{height:100%;width:0%;background:var(--akku);transition:width .15s linear}
   #toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,80px);background:var(--panel2);
     border:1px solid var(--line2);color:var(--txt);padding:11px 18px;border-radius:11px;font-size:14px;
     font-weight:600;box-shadow:0 10px 30px rgba(0,0,0,.5);transition:transform .3s;z-index:50;max-width:90vw}
@@ -149,7 +152,7 @@
 <header>
   <div class="brand">
     <div class="logo">G</div>
-    <div><h1>GODMODULE · Energy Core</h1><div class="sub">Womo Energy Core v5.4</div></div>
+    <div><h1>GODMODULE · Energy Core</h1><div class="sub">Womo Energy Core v5.4.1</div></div>
   </div>
   <div class="pills">
     <span class="pill"><span id="dWs" class="dot"></span><span id="tWs">Verbinde…</span></span>
@@ -305,6 +308,26 @@
           <span class="k">Freier PSRAM</span><span class="v" id="sPsram">–</span>
           <span class="k">Laufzeit</span><span class="v" id="sUp">–</span>
           <span class="k">Wechselrichter</span><span class="v"><span class="led" id="ledInv"></span> <span id="sInv">–</span></span>
+        </div>
+      </div>
+
+      <div class="card wide">
+        <div class="ch"><h2>Firmware-Update</h2><span class="badge" id="otaBadge">–</span></div>
+        <div class="params">
+          <div class="field"><label>Update-Typ</label>
+            <div class="hint">Firmware = <code>firmware.bin</code> (pio run) · Dashboard = <code>littlefs.bin</code> (pio run -t buildfs), jeweils aus <code>.pio/build/esp32-s3-devkitc-1/</code>.</div>
+            <div class="ip"><select id="otaType">
+              <option value="fw">Firmware (firmware.bin)</option>
+              <option value="fs">Dashboard / LittleFS (littlefs.bin)</option>
+            </select></div></div>
+          <div class="field"><label>Datei</label>
+            <div class="hint">Während des Updates Gerät nicht ausschalten. Nach Erfolg startet das System automatisch neu (~10 s).</div>
+            <div class="ip"><input type="file" id="otaFile" accept=".bin"></div></div>
+          <div class="actions">
+            <button type="button" class="btn danger" id="otaBtn">Update starten</button>
+            <span class="curval" id="otaStat"></span>
+          </div>
+          <div class="pbar" style="grid-column:1/-1"><div id="otaProg"></div></div>
         </div>
       </div>
     </div>
@@ -477,7 +500,7 @@
 </main>
 
 <div id="toast"></div>
-<div class="foot">GODMODULE · Energy Core v5.4 · WLAN: GODMODULE · http://192.168.4.1 · <span id="footTz">MEZ</span></div>
+<div class="foot">GODMODULE · Energy Core v5.4.1 · WLAN: GODMODULE · http://192.168.4.1 · <span id="footTz">MEZ</span></div>
 
 <script>
 "use strict";
@@ -493,6 +516,7 @@ document.querySelectorAll("nav.tabs button").forEach(b=>{b.onclick=()=>{
   b.classList.add("active");$(b.dataset.view).classList.add("active");
   if(b.dataset.view==="live")loadLive();
   if(b.dataset.view==="hist")loadSdFiles();
+  if(b.dataset.view==="sys")loadOta();
   if(b.dataset.view==="cfg"){if(!paramsLoaded)loadParams();loadTz();loadWifi();}
   setLevelPolling(b.dataset.view==="lage");
   if(b.dataset.view==="lage")loadLevelCfg();
@@ -812,6 +836,54 @@ $("wifiSaveBtn").onclick=async()=>{
     else toast(res.error||"Fehler","bad");
   }catch(_){toast("Speichern fehlgeschlagen","bad");}finally{$("wifiSaveBtn").disabled=false;}
 };
+
+/* ---- Web-OTA (v5.4.1) ---- */
+async function loadOta(){
+  try{const r=await fetch("/api/ota",{cache:"no-store"});const o=await r.json();
+    $("otaBadge").textContent=`v${o.version} · läuft auf ${o.partition}`;
+  }catch(_){$("otaBadge").textContent="–";}
+}
+$("otaBtn").onclick=()=>{
+  const f=$("otaFile").files[0];
+  const type=$("otaType").value;
+  if(!f){toast("Keine Datei gewählt","bad");return;}
+  // Plausibilität Dateiname ↔ Typ (nur Warnung per Bestätigung, kein Block)
+  const expect=type==="fs"?"littlefs":"firmware";
+  const nameOk=f.name.toLowerCase().includes(expect);
+  const msg=(nameOk?"":"⚠ Dateiname passt nicht zum gewählten Typ!\n\n")
+    +`${type==="fs"?"Dashboard":"Firmware"}-Update starten?\n${f.name} (${(f.size/1024).toFixed(0)} kB)\n\nGerät startet danach automatisch neu.`;
+  if(!confirm(msg))return;
+  const xhr=new XMLHttpRequest();
+  const fd=new FormData();fd.append("update",f,f.name);
+  $("otaBtn").disabled=true;$("otaFile").disabled=true;$("otaType").disabled=true;
+  $("otaProg").style.width="0%";$("otaStat").textContent="0 %";
+  xhr.upload.onprogress=e=>{if(e.lengthComputable){
+    const p=Math.round(e.loaded/e.total*100);
+    $("otaProg").style.width=p+"%";$("otaStat").textContent=p+" %";}};
+  const fail=t=>{toast(t||"Update fehlgeschlagen","bad");
+    $("otaStat").textContent="Fehler";$("otaProg").style.width="0%";
+    $("otaBtn").disabled=false;$("otaFile").disabled=false;$("otaType").disabled=false;};
+  xhr.onerror=()=>fail("Verbindung abgebrochen");
+  xhr.onload=()=>{
+    let res={};try{res=JSON.parse(xhr.responseText);}catch(_){}
+    if(xhr.status===200&&res.ok){
+      $("otaStat").textContent="Neustart …";
+      toast("Update OK — Gerät startet neu","ok");
+      otaWaitReboot();
+    }else fail(res.error);
+  };
+  xhr.open("POST","/api/ota?type="+encodeURIComponent(type));
+  xhr.send(fd);
+};
+// Nach dem Neustart pollen, bis das Gerät wieder antwortet, dann neu laden.
+function otaWaitReboot(){
+  let tries=0;
+  const iv=setInterval(async()=>{
+    if(++tries>40){clearInterval(iv);$("otaStat").textContent="Gerät antwortet nicht — Seite manuell neu laden";return;}
+    try{const r=await fetch("/api/live",{cache:"no-store"});
+      if(r.ok){clearInterval(iv);location.reload();}}catch(_){}
+  },3000);
+}
 
 /* ---- Lage / Wasserwaage ---- */
 const LV_WHEELS=[["lvW0","lvT0"],["lvW1","lvT1"],["lvW2","lvT2"],["lvW3","lvT3"]];

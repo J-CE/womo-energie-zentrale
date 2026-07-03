@@ -1,6 +1,7 @@
 // ============================================================
-//  http_server.cpp — Womo Energy Core v5.4
+//  http_server.cpp — Womo Energy Core v5.4.1
 //
+//  v5.4.1: Web-OTA (/api/ota GET+POST) — Logik im Modul ota.cpp.
 //  v5.0: 12 Parameter (socDPlusHigh/socGelHigh neu,
 //  socGelOff/pvWRThreshold* entfernt).
 //  Alle anderen Fixes aus v4.3 bleiben erhalten.
@@ -16,6 +17,7 @@
 #include "inverter.h"
 #include "clock.h"
 #include "level.h"
+#include "ota.h"
 #include <WiFi.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
@@ -592,6 +594,14 @@ void webserver_init() {
         post_empty_guard, nullptr, handle_levelcfg_post);
     server.on("/api/levelcalib", HTTP_POST,
         post_empty_guard, nullptr, handle_levelcalib_post);
+    // Web-OTA (v5.4.1): GET = Info, POST = Multipart-Datei-Upload.
+    // 4. Argument ist der onUpload-Callback (NICHT onBody wie bei den
+    // JSON-POSTs); ota_handle_request antwortet nach Upload-Abschluss
+    // und deckt auch den Leerer-Body-Fall ab (kein post_empty_guard nötig).
+    server.on("/api/ota", HTTP_GET, [](AsyncWebServerRequest* r){
+        r->send(200, "application/json", ota_to_json());
+    });
+    server.on("/api/ota", HTTP_POST, ota_handle_request, ota_handle_upload);
 
     // Statischer Catch-all ZULETZT — sonst fängt er /api/* ab
     server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");

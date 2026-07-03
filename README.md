@@ -1,4 +1,4 @@
-# Womo Energy Core v5.4
+# Womo Energy Core v5.4.1
 
 Eigenentwickeltes Energiemanagement-System für ein Wohnmobil, basierend auf einem ESP32-S3. Überwacht BMS und MPPT-Laderegler, steuert Verbraucher/Lader automatisch nach Ladezustand und Solarleistung, loggt historische Daten und liefert ein komplett offline-fähiges Web-Dashboard.
 
@@ -34,6 +34,7 @@ Die vollständige GPIO-Belegung steht in `src/config.h` (P-SW03 im Lastenheft).
 - **RGB-Status-LED** zeigt BMS-/MPPT-Fehler, SoC, Landstrom und alle Aktoren gleichzeitig in einem Rundlauf-Muster an
 - **JK-BMS-Anbindung wahlweise über UART-TTL (GPS-Port) oder CAN** (Compile-Zeit-Umschaltung, identischer Datenoutput)
 - **Elektronische Wasserwaage** (optional, MMA8452Q): Neigungsmessung (Roll/Pitch), automatische Keilhöhen-Berechnung pro Rad, eigener Dashboard-Tab mit Libellen-Anzeige und Kalibrierung
+- **Web-OTA** (v5.4.1): Firmware- und Dashboard-Updates direkt aus dem Browser (System-Tab), ohne PC/USB — Dual-App-Partitionslayout, Upload mit Fortschrittsanzeige, automatischer Neustart mit Ringpuffer-Sicherung
 
 Die vollständige, nummerierte Anforderungsliste steht in [`Software_Lasten_Pflichtenheft.txt`](./Software_Lasten_Pflichtenheft.txt).
 
@@ -41,7 +42,7 @@ Die vollständige, nummerierte Anforderungsliste steht in [`Software_Lasten_Pfli
 
 ```
 ├── platformio.ini          # Build-Konfiguration (gepinnte Library-Versionen)
-├── partitions_16mb.csv     # Eigene Partitionstabelle (kein OTA)
+├── partitions_16mb.csv     # Eigene Partitionstabelle (Dual-App OTA)
 ├── src/
 │   ├── config.h            # GPIO-Pins, Default-Parameter, Tuning-Konstanten
 │   ├── secrets.h           # WLAN-Zugangsdaten (NICHT im Repo, siehe unten)
@@ -56,6 +57,7 @@ Die vollständige, nummerierte Anforderungsliste steht in [`Software_Lasten_Pfli
 │   ├── logger.h / .cpp     # PSRAM-Ringpuffer + SD-Logging
 │   ├── clock.h / .cpp      # Zeitdienst (DS3231-RTC)
 │   ├── watchdog.h / .cpp   # Software-Modulüberwachung
+│   ├── ota.h / .cpp        # Web-OTA (Firmware- & Dashboard-Update per Browser)
 │   └── http_server.h / .cpp# Webserver, WebSocket, REST-API
 └── data/
     └── index.html          # Dashboard (LittleFS, offline-fähig)
@@ -107,9 +109,22 @@ build_src_filter = +<*> -<bms.cpp>
 
 Details siehe Lastenheft, Abschnitt P-SW17.
 
+**6. Folge-Updates per Browser (Web-OTA, ab v5.4.1):**
+
+Nach der Erstinstallation sind USB-Flashvorgänge nicht mehr nötig. Im Dashboard unter **System → Firmware-Update**:
+
+| Update-Typ | Datei | Erzeugen mit |
+|---|---|---|
+| Firmware | `.pio/build/esp32-s3-devkitc-1/firmware.bin` | `pio run` |
+| Dashboard (LittleFS) | `.pio/build/esp32-s3-devkitc-1/littlefs.bin` | `pio run -t buildfs` |
+
+Nach erfolgreichem Upload sichert das Gerät den Ringpuffer auf SD und startet automatisch neu (~10 s). Bei einem fehlgeschlagenen Firmware-Update bootet weiterhin die alte, unveränderte Partition — das System bleibt funktionsfähig. Bei einem fehlgeschlagenen Dashboard-Update den Upload einfach aus der noch geladenen Seite wiederholen.
+
+> ⚠️ **Einmalige Migration von Versionen < v5.4.1** (Single-App-Partitionslayout): Der Wechsel auf das Dual-App-Layout erfordert ein letztes Mal USB: `pio run -t erase` → `pio run -t upload` → `pio run -t uploadfs`. Der Erase löscht **alle** NVS-Namespaces — vorher Schaltparameter, Heim-WLAN, Zeitzone und Lage-Kalibrierung notieren und danach neu einrichten.
+
 ## Status / Roadmap
 
-**Läuft bereits:** WLAN-AP, Webserver/Dashboard, LittleFS, SD-Karten-Logging, DS3231-RTC, RGB-Status-LED, Lagesensor (MMA8452Q verbaut, Firmware inkl. REST-API vollständig).
+**Läuft bereits:** WLAN-AP, Webserver/Dashboard, LittleFS, SD-Karten-Logging, DS3231-RTC, RGB-Status-LED, Lagesensor (MMA8452Q verbaut, Firmware inkl. REST-API vollständig), Web-OTA (Firmware + Dashboard, v5.4.1).
 
 **Aktueller Hardware-Meilenstein:** JK-BMS-Anbindung umgestellt von RS485 (3-Pin JST-GH-Stecker nicht beschaffbar) auf direkte UART-TTL-Verdrahtung am GPS-Port (4-Pin, vorhandener Steckertyp) — kein MAX485 mehr nötig. Pinpegel am Gerät verifiziert (Pin 2/3 ~2,5V, kein VBAT). Offen: erste Kommunikationsverifikation; FW V11.287H liegt im Bereich, in dem manche Geräte über den GPS-Port keine Antwort mehr liefern — Fallback wäre die CAN-Variante (bmscan.cpp) oder eine MAX485-Doppelbrücke.
 

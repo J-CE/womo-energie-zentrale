@@ -1,5 +1,5 @@
 // ============================================================
-//  main.cpp — Womo Energy Core v5.4
+//  main.cpp — Womo Energy Core v5.4.1
 //
 //  Watchdog (zweistufig):
 //   • HW-WDT (esp_task_wdt, 4s) überwacht loop() → harter Reboot
@@ -27,6 +27,7 @@
 #include "watchdog.h"
 #include "clock.h"
 #include "level.h"
+#include "ota.h"
 
 static TaskHandle_t h_logic  = nullptr;
 static TaskHandle_t h_mppt   = nullptr;
@@ -124,7 +125,7 @@ void setup() {
 
     Serial.println("\n╔═══════════════════════════════╗");
     Serial.println("║   GODMODULE — Energy Core     ║");
-    Serial.println("║   Womo Energy Core v5.4       ║");
+    Serial.printf ("║   Womo Energy Core v%-10s║\n", FW_VERSION);
     Serial.println("╚═══════════════════════════════╝\n");
 
     io_init();
@@ -138,6 +139,7 @@ void setup() {
     clock_init();
     level_init();         // Lagesensor (optional) — nach clock_init: Wire + g_i2cMutex bereit
     webserver_init();
+    ota_init();           // Boot-Diagnose: laufende/nächste OTA-Partition loggen
 
     // F-01: Rückgabe jeder Task-Erzeugung prüfen. Alle Creates werden versucht
     // (kein Short-Circuit), damit im Fehlerfall ALLE Ausfälle sichtbar werden.
@@ -169,6 +171,7 @@ void setup() {
 
 void loop() {
     esp_task_wdt_reset();
+    ota_tick();           // geplanter OTA-Neustart (Sicherung + ESP.restart)
     uint32_t freeHeap = ESP.getFreeHeap();
     // Nicht-blockierend: Flag setzen, der LED-Task zeigt Magenta-Burst.
     // (Früher blockierte io_blink_status_led() hier bis 450ms in loop().)

@@ -1,5 +1,5 @@
 // ============================================================
-//  config.h — Womo Energy Core v5.4
+//  config.h — Womo Energy Core v5.4.1
 //  Zielplattform: ESP32-S3 DevKitC-1 N16R8
 //
 //  GPIO-Reservierungen ESP32-S3 N16R8:
@@ -15,6 +15,11 @@
 // ============================================================
 
 #pragma once
+
+// ── Firmware-Version (v5.4.1) ────────────────────────────────
+// Zentrale Quelle für Boot-Banner (main.cpp) und /api/ota.
+// Bei jedem Release NUR hier ändern (+ Datei-Kopfzeilen).
+#define FW_VERSION "5.4.1"
 
 // ============================================================
 //  BLOCK 1 — HARDWARE-KONSTANTEN

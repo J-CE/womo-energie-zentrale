@@ -1,7 +1,7 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║   ANSCHLUSS-ANLEITUNG — WOMO ENERGY CORE / GODMODULE              ║
 ║   Sensoren & Aktoren, Modul für Modul                            ║
-║   Basis: Pflichtenheft v5.4 + config.h                           ║
+║   Basis: Pflichtenheft v5.4.1 + config.h                         ║
 ║   Stand: Hardware-Entscheidungen eingearbeitet —                 ║
 ║     • D+ und Gel-Lader über 2× Joy-it COM-MOSFET (IRF9540N)      ║
 ║     • JK-BMS direkt per UART-TTL am GPS-Port (kein MAX485        ║
@@ -13,6 +13,9 @@
 ║     • Sicherungen: D+ 1A, Gel-Lader 3A                          ║
 ║     • DS3231-RTC bestückt und produktiv (war: reserviert)        ║
 ║     • Lagesensor MMA8452Q am geteilten I2C-Bus (optional)        ║
+║     • Web-OTA (v5.4.1): Firmware-/Dashboard-Update per Browser — ║
+║       keine Verdrahtungsänderung, aber einmalige USB-Migration   ║
+║       auf das Dual-App-Layout nötig (Flash-Erase, s. unten)      ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 WICHTIG — VOR DEM VERDRAHTEN LESEN
@@ -329,6 +332,40 @@ GPIO-GESAMTTABELLE
   FREI/ADC: 6–10 (analog), 15 (digital)
 
 ══════════════════════════════════════════════════════════════════
+WEB-OTA — EINMALIGE UMSTELLUNG AUF DUAL-APP (v5.4.1)
+══════════════════════════════════════════════════════════════════
+KEINE Verdrahtungsänderung — Web-OTA ist rein Software. ABER: das
+neue Partitionslayout (zwei App-Partitionen für den A/B-Wechsel)
+unterscheidet sich vom bisherigen Single-App-Layout, daher ist EIN
+letzter USB-Flash mit vollständigem Flash-Erase nötig. Danach laufen
+alle weiteren Firmware- und Dashboard-Updates über den Browser.
+
+  ACHTUNG: `pio run -t erase` löscht ALLE im NVS gespeicherten
+  Einstellungen. VORHER notieren/abfotografieren:
+    • Schaltparameter (Einstellungen-Tab, 12 Werte)
+    • Heim-WLAN-SSID (Passwort neu eingeben)
+    • Zeitzone (falls von Default Berlin abweichend)
+    • Lage-Kalibrierung (nach Erase am ebenen Stand neu kalibrieren)
+
+  Ablauf (VS Code / PlatformIO-Terminal):
+    1. pio run -t erase      (Flash + alle NVS-Namespaces löschen)
+    2. pio run -t upload      (Firmware v5.4.1 + Dual-App-Tabelle)
+    3. pio run -t uploadfs    (Dashboard in die neue spiffs-Partition)
+    4. Reset-Taste am DevKit (USB-CDC-Reconnect nach Upload)
+    5. Mit AP "GODMODULE" verbinden, Einstellungen neu setzen
+
+  Ab dann Updates im Dashboard unter System → Firmware-Update:
+    • Firmware  = .pio/build/esp32-s3-devkitc-1/firmware.bin
+                  (erzeugt mit `pio run`)
+    • Dashboard = .pio/build/esp32-s3-devkitc-1/littlefs.bin
+                  (erzeugt mit `pio run -t buildfs`)
+  Nach erfolgreichem Upload sichert das Gerät den Ringpuffer auf SD
+  und startet automatisch neu (~10s). Ein fehlgeschlagenes Firmware-
+  Update lässt die alte, laufende Partition unangetastet — das Gerät
+  bootet weiterhin. Ein fehlgeschlagenes Dashboard-Update einfach aus
+  der noch geladenen Seite wiederholen.
+
+══════════════════════════════════════════════════════════════════
 NÖTIGE config.h-ÄNDERUNGEN
 ══════════════════════════════════════════════════════════════════
   // D+ über Joy-it COM-MOSFET (P-Kanal, High-Side, Active-HIGH):
@@ -378,5 +415,9 @@ PRÜF-CHECKLISTE VOR ERSTINBETRIEBNAHME
     DS3231), Dashboard-Tab "Lage" zeigt "Sensor erkannt", auf ebenem
     Untergrund kalibriert, Spurweite/Radstand im Konfigformular gesetzt
 [ ] Erststart: Module EINZELN zuschalten, im Monitor verifizieren
+[ ] Web-OTA-Migration (v5.4.1, einmalig): NVS-Einstellungen notiert,
+    pio run -t erase → upload → uploadfs durchgeführt, Einstellungen
+    im Dashboard neu gesetzt; System → Firmware-Update zeigt korrekte
+    Version + laufende Partition
 ══════════════════════════════════════════════════════════════════
-Ende — Basis Pflichtenheft v5.4 + Hardware-Entscheidungen
+Ende — Basis Pflichtenheft v5.4.1 + Hardware-Entscheidungen

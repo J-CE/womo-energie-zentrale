@@ -1,5 +1,5 @@
 // ============================================================
-//  http_server.h — Womo Energy Core v5.4
+//  http_server.h — Womo Energy Core v5.4.1
 //  AsyncWebServer-Interface: REST-API + WebSocket-Broadcast
 //
 //  Endpunkte:
@@ -20,6 +20,8 @@
 //    GET  /api/levelcfg   Lagesensor-Konfiguration
 //    POST /api/levelcfg   Lagesensor-Konfiguration setzen
 //    POST /api/levelcalib Lagesensor kalibrieren (Null-Offset setzen/löschen)
+//    GET  /api/ota       OTA-Info (Version, Partition, Größen) (v5.4.1)
+//    POST /api/ota       Web-OTA-Upload: ?type=fw|fs (Firmware/Dashboard)
 //    WS   /ws            Push alle 2s
 // ============================================================
 #pragma once

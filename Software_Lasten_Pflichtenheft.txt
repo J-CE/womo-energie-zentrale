@@ -1,10 +1,11 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║     LASTEN- UND PFLICHTENHEFT — SOFTWARE                        ║
-║     Womo Energy Core v5.4                                        ║
+║     Womo Energy Core v5.4.1                                      ║
 ║     Stand: DS3231-RTC produktiv + CAN-BMS-Alternative +          ║
 ║            RGB-Rundlauf-Encoding + Renogy-NVS-Wechselrichter +  ║
 ║            Landstrom-Spannungsteiler + BMS direkt am GPS-Port + ║
-║            Lagesensor (MMA8452Q, elektronische Wasserwaage)     ║
+║            Lagesensor (MMA8452Q, elektronische Wasserwaage) +   ║
+║            Web-OTA (Firmware- & Dashboard-Update per Browser)   ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -272,6 +273,26 @@ L-SW21 | LAGESENSOR / ELEKTRONISCHE WASSERWAAGE  [NEU v5.4] [KANN]
   angezeigt, sonst keine Reaktion).
   Implementierungsdetails siehe P-SW19.
 
+L-SW22 | WEB-OTA (FIRMWARE- & DASHBOARD-UPDATE)  [NEU v5.4.1] [SOLLTE]
+  Firmware- und Dashboard-Updates müssen ohne PC/USB direkt aus dem
+  Web-Dashboard einspielbar sein — Voraussetzung für den mobilen
+  Betrieb ohne angeschlossenen Rechner (Kernziel des Projekts).
+  Zwei Update-Arten über den System-Tab:
+   (a) Firmware  — die Anwendung selbst (firmware.bin).
+   (b) Dashboard — das LittleFS-Image mit index.html (littlefs.bin),
+       damit auch reine Oberflächen-Änderungen ohne USB möglich sind.
+  Ausfallsicherheit: Ein fehlgeschlagenes Firmware-Update darf das
+  System nicht unbrauchbar machen — die zuvor laufende Anwendung
+  bleibt in ihrer eigenen Partition bootfähig (Dual-App-Layout).
+  Nach erfolgreichem Update sichert das Gerät den RAM-Ringpuffer auf
+  SD und startet selbsttätig neu; das Dashboard verbindet sich nach
+  dem Neustart automatisch wieder.
+  Einmalige Voraussetzung: Der Wechsel vom bisherigen Single-App-
+  Partitionslayout auf das Dual-App-Layout erfordert genau einen
+  letzten USB-Flash mit vorherigem Flash-Erase (löscht alle NVS-
+  Namespaces — siehe P-SW20 / Anschluss-Anleitung).
+  Implementierungsdetails siehe P-SW20.
+
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 TEIL 2 — PFLICHTENHEFT (Wie ist die Software umgesetzt?)
@@ -293,9 +314,13 @@ P-SW01 | PLATTFORM UND ENTWICKLUNGSUMGEBUNG  [GEÄNDERT v5.1]
                board_build.arduino.memory_type=qio_opi für Octal-PSRAM
                erforderlich. Bei Partitionsänderung: pio run -t erase
                vor dem nächsten Upload.
-  Partition:   Eigene partitions_16mb.csv — KEIN OTA (Single-App):
-               nvs 20kB | app0 4MB (factory) | spiffs ~11,8MB |
-               coredump 128kB
+  Partition:   Eigene partitions_16mb.csv — Dual-App OTA (v5.4.1):
+               nvs 20kB | otadata 8kB | app0/ota_0 4MB |
+               app1/ota_1 4MB | spiffs 8000kB (LittleFS) |
+               coredump 128kB. Exakt 16MB, App-Partitionen 64k-
+               aligned. (Bis v5.4: Single-App ohne OTA, nvs 20kB |
+               app0 4MB factory | spiffs ~11,8MB | coredump 128kB —
+               Migration siehe P-SW20.)
   Filesystem:  LittleFS (Partition-Label "spiffs", Web-Dateien: index.html)
                Eigener Build-Schritt nötig: pio run -t uploadfs
                (unabhängig vom Firmware-Upload).
@@ -327,10 +352,15 @@ P-SW02 | PROJEKTSTRUKTUR (QUELLDATEIEN)  [GEÄNDERT v5.1]
   src/clock.h/.cpp      Zeitdienst (DS3231-RTC führend, v5.1 produktiv)
   src/watchdog.h/.cpp   Software-Modulüberwachung BMS/MPPT/Logger
   src/http_server.h/.cpp HTTP-Server, WebSocket, REST-API (Streaming)
+  src/ota.h/.cpp        Web-OTA: Firmware- & Dashboard-Upload per
+                        Browser (Update.h, Dual-App), neu v5.4.1
   src/main.cpp          Setup, FreeRTOS-Tasks, HW-Watchdog
   data/index.html       Dashboard (LittleFS, Offline-fähig)
-  partitions_16mb.csv   Partitionstabelle (kein OTA)
+  partitions_16mb.csv   Partitionstabelle (Dual-App OTA, v5.4.1)
   platformio.ini        Build-Konfiguration (gepinnte Abhängigkeiten)
+  Zentrale Versionskonstante FW_VERSION in config.h (v5.4.1) —
+  speist Boot-Banner (main.cpp) und GET /api/ota; bei jedem Release
+  nur dort + in den Datei-Kopfzeilen ändern.
 
 P-SW03 | GPIO-BELEGUNG (FINAL, ESP32-S3 N16R8)  [GEÄNDERT v5.4]
   GPIO  1   → I2C SDA   DS3231 RTC (bestückt, produktiv seit v5.1) +
@@ -402,6 +432,9 @@ P-SW05 | FREERTOS TASK-ARCHITEKTUR
     → überwacht Modul-Timer, hängt selbst am HW-WDT (Backstop)
   Main Loop:
     → esp_task_wdt_reset() (HW-WDT, 4s) + Heap-Überwachung (< 20kB)
+    → ota_tick(): führt einen nach erfolgreichem Web-OTA geplanten
+      Neustart aus (Ringpuffer-Sicherung + ESP.restart()) — bewusst
+      im loop-Kontext, NICHT im AsyncTCP-Task (siehe P-SW20).
 
 P-SW06 | MUTEX-KONZEPT (THREAD-SICHERHEIT)  [GEÄNDERT v5.4]
   g_bmsMutex   (bms.cpp)    → schützt BMSData g_bms
@@ -542,6 +575,11 @@ P-SW12 | WEBSERVER-ARCHITEKTUR
     GET  /api/levelcfg       → Lagesensor-Konfiguration (JSON)
     POST /api/levelcfg       → Lagesensor-Konfiguration setzen
     POST /api/levelcalib     → Lagesensor kalibrieren {"reset":bool}
+    GET  /api/ota            → OTA-Info: Version, laufende/nächste
+                               Partition, App-Max, LittleFS-Größen
+    POST /api/ota?type=fw|fs → Web-OTA-Upload (Multipart): Firmware
+                               (U_FLASH) bzw. Dashboard (U_SPIFFS),
+                               siehe P-SW20
   WebSocket-Broadcast: alle 2s. ws.makeBuffer() + ref-counting.
     ws.cleanupClients() nur aus WS-Event-Handler (AsyncTCP-Thread).
   handle_buffer: logger_snapshot → PSRAM + AsyncResponseStream.
@@ -578,6 +616,13 @@ P-SW13 | DASHBOARD (data/index.html)  [GEÄNDERT v5.4]
       Power-LED aus), grün (Power-LED an / "Ein"), rot (Alarm-LED an,
       Vorrang vor grün). Bei valid=false (vor erstem Poll / Mutex-
       Timeout) LED grau + Label "–". Quelle: inv.power_on / inv.alarm.
+    - Firmware-Update-Karte (v5.4.1): Typ-Auswahl (Firmware/
+      Dashboard), Dateiauswahl (.bin), Fortschrittsbalken via
+      XHR-upload.onprogress, Sicherheitsabfrage (mit Warnung bei
+      Dateiname↔Typ-Mismatch) vor dem Start, automatischer Reconnect
+      nach dem Neustart (pollt /api/live, lädt die Seite neu). Beim
+      Öffnen des Tabs wird GET /api/ota geladen (aktive Version +
+      laufende Partition im Badge). Siehe P-SW20.
   Lage-Tab (optional, nur sinnvoll mit verbautem MMA8452Q):
     - Libellen-SVG: Blase wandert zur hohen Seite (Roll/Pitch-Vektor),
       grün bei "eben" (|Roll|,|Pitch| < Toleranz), sonst akku-farben
@@ -636,12 +681,19 @@ P-SW15 | SICHERHEITS-IMPLEMENTIERUNGEN  [GEÄNDERT]
   13. Pfad-Validierung in handle_sddata: "/" am Anfang, kein "..".
   14. POST-Body-Limit: > 2048 Byte → HTTP 413.
 
-P-SW16 | BEKANNTE OFFENE PUNKTE (SOFTWARE)  [GEÄNDERT v5.4]
+P-SW16 | BEKANNTE OFFENE PUNKTE (SOFTWARE)  [GEÄNDERT v5.4.1]
   ERLEDIGT SEIT v5.1:
    • RTC: DS3231 an I2C GPIO 1/2 bestückt und produktiv — führende
      Zeitquelle, übersteht Stromausfälle eigenständig (siehe L-SW19).
    • Lagesensor: MMA8452Q verbaut, level.h/.cpp + Dashboard-Tab +
      REST-API vollständig implementiert (v5.4, siehe L-SW21/P-SW19).
+   • Web-OTA: Firmware- und Dashboard-Update per Browser vollständig
+     implementiert (v5.4.1, ota.h/.cpp, Dual-App-Partitionslayout,
+     siehe L-SW22/P-SW20). Vollständiger Build verifiziert (Firmware
+     ~998kB / 24% der 4MB-App-Partition, littlefs.bin passt in die
+     8000kB-spiffs-Partition, Magic-Byte-Schutz geprüft). OFFEN:
+     einmalige USB-Migration auf das Dual-App-Layout am realen Gerät
+     durchführen (Ablauf siehe P-SW20).
 
   OFFEN:
   1. JK-BMS-Verkabelung: 3-Pin-JST-GH-Stecker (CAN/RS485-Port) nicht
@@ -814,9 +866,112 @@ P-SW19 | LAGESENSOR (level.h/.cpp)  [NEU v5.4]
   und der Lage-Tab waren vollständig, aber ohne Server-Anbindung
   (404 statt JSON). Beim Doku-Update nachgetragen und ergänzt.
 
+P-SW20 | WEB-OTA (ota.h/.cpp)  [NEU v5.4.1]
+  Zweck: Firmware und Dashboard ohne PC/USB über den Browser
+  aktualisieren (L-SW22). Eigenes Modul, hält http_server.cpp schlank.
+  Partitionslayout (partitions_16mb.csv, Dual-App):
+    nvs 0x9000/0x5000 | otadata 0xE000/0x2000 |
+    ota_0 0x10000/0x400000 | ota_1 0x410000/0x400000 |
+    spiffs 0x810000/0x7D0000 (8000kB LittleFS) |
+    coredump 0xFE0000/0x20000. Summe exakt 16MB, Apps 64k-aligned.
+    LittleFS schrumpft ggü. Single-App von ~11,8MB auf 8000kB —
+    unkritisch (dort liegt nur index.html).
+  Update-Mechanik (Arduino <Update.h>):
+    - type=fw → U_FLASH: schreibt in die inaktive App-Partition
+      (esp_ota_get_next_update_partition), Update.h schaltet nach
+      Update.end() die otadata-Boot-Auswahl um.
+    - type=fs → U_SPIFFS: überschreibt die spiffs-Partition mit dem
+      LittleFS-Image. LittleFS.end() VOR dem Schreiben (Partition
+      wird komplett ersetzt); serveStatic liefert danach bis zum
+      Neustart nichts mehr, die bereits geladene Seite läuft weiter.
+    - Größe unbekannt (Multipart-Overhead) → Update.begin(
+      UPDATE_SIZE_UNKNOWN, cmd); Update.end(true) finalisiert mit der
+      tatsächlich geschriebenen Länge.
+  Endpunkte:
+    GET  /api/ota → ota_to_json(): version (FW_VERSION), partition
+      (laufend), next (Ziel), app_max, fs_total, fs_used.
+    POST /api/ota?type=fw|fs → Multipart-Upload. onUpload-Callback
+      (ota_handle_upload) schreibt chunked im AsyncTCP-Task;
+      onRequest-Callback (ota_handle_request) antwortet nach
+      Abschluss und deckt auch den Leerer-Body-Fall ab (kein
+      post_empty_guard nötig). Routen VOR serveStatic registriert
+      (siehe P-SW12-Hinweis).
+  Sicherheits-/Robustheitsmaßnahmen:
+    - Magic-Byte-Prüfung: fw-Upload muss mit 0xE9 (ESP-Image-Magic)
+      beginnen — verhindert das versehentliche Flashen von
+      littlefs.bin als Firmware (führte sonst zu nicht bootender App).
+    - Genau EIN Upload gleichzeitig: globaler Claim (s_inProgress +
+      s_activeReq) unter portMUX-Spinlock (Test-and-Set); zweiter
+      paralleler Upload wird abgewiesen.
+    - Per-Request-Zustand (OtaReqState: claimed/success/cmd/written/
+      err) liegt heap-alloziert in req->_tempObject. Der Request-
+      Destruktor ruft free(_tempObject) (verifiziert esp32async-Fork
+      v3.7.0, WebRequest.cpp) → kein Leak auch bei Client-Abbruch,
+      keine Interferenz zwischen zeitgleichen Uploads, kein globaler
+      Fehler-/Fortschritts-State.
+    - Client-Abbruch: req->onDisconnect ruft Update.abort() und gibt
+      den Claim frei — feuert auch nach ERFOLGREICHER Antwort
+      (normales TCP-Close), daher nur abbrechen, wenn dieser Request
+      den Claim noch hält.
+    - Neustart deferred: ota_handle_request setzt nur s_rebootAtMs
+      (volatile uint32_t, 32-bit-atomar auf Xtensa) auf millis()+
+      1500ms; ota_tick() im loop-Kontext (Core 1) führt VOR dem
+      ESP.restart() logger_emergency_back_up("OTA_REBOOT") aus. NIE
+      Neustart im AsyncTCP-Handler (Response muss erst raus, und ein
+      restart aus dem TCP-Callback ist unsauber).
+    - Watchdogs unberührt: Upload läuft im async_tcp-Task, loop()
+      tickt weiter (HW-WDT), die SW-WDT-Module (BMS/MPPT/Logger)
+      laufen normal. Kein zusätzlicher esp_task_wdt-Eingriff nötig.
+  Migration von <v5.4.1 (Single-App): einmalig USB nötig, da sich
+    die Partitionsgeometrie ändert:
+      1. Schaltparameter, Heim-WLAN (SSID), Zeitzone und Lage-
+         Kalibrierung notieren (werden gelöscht).
+      2. pio run -t erase  (löscht ALLE NVS-Namespaces: womo_cfg,
+         wifi, clock, level).
+      3. pio run -t upload  (neue Firmware + Dual-App-Tabelle).
+      4. pio run -t uploadfs  (LittleFS in die neue spiffs-Partition).
+      5. Parameter/WLAN/TZ/Kalibrierung im Dashboard neu setzen.
+    Danach laufen alle weiteren Updates ausschließlich über den
+    Browser. Erzeugung der Images: firmware.bin via `pio run`,
+    littlefs.bin via `pio run -t buildfs` (jeweils unter
+    .pio/build/esp32-s3-devkitc-1/).
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ÄNDERUNGSPROTOKOLL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+─── v5.4 → v5.4.1 ───────────────────────────────────────────────
+
+  WEB-OTA (NEU):
+  • Firmware- und Dashboard-Update direkt aus dem Browser (System-
+    Tab), ohne PC/USB. Neues Modul ota.h/.cpp: Upload-Handler
+    (Update.h), Magic-Byte-Prüfung (0xE9) für Firmware, per-Request-
+    Zustand in req->_tempObject, genau ein Upload gleichzeitig
+    (Spinlock-Claim), Client-Abbruch via onDisconnect → Update.abort().
+    [L-SW22, P-SW02, P-SW20]
+  • Neustart deferred in loop() (ota_tick), NIE im AsyncTCP-Kontext;
+    vor ESP.restart() logger_emergency_back_up("OTA_REBOOT").
+    [P-SW05, P-SW20]
+  • Partitionstabelle auf Dual-App-OTA umgestellt: nvs 20k | otadata
+    8k | ota_0 4MB | ota_1 4MB | spiffs 8000k | coredump 128k
+    (exakt 16MB, Apps 64k-aligned). LittleFS von ~11,8MB auf 8000k
+    verkleinert (unkritisch). ERFORDERT einmalige USB-Migration mit
+    pio run -t erase (löscht alle NVS-Namespaces). [P-SW01, P-SW20]
+  • Zwei neue Endpunkte: GET /api/ota (Version/Partition/Größen),
+    POST /api/ota?type=fw|fs (Multipart-Upload). [P-SW12, P-SW20]
+  • Dashboard: neue Karte "Firmware-Update" im System-Tab mit Typ-
+    Auswahl, Fortschrittsbalken (XHR), Sicherheitsabfrage und
+    automatischem Reconnect nach Neustart. [P-SW13]
+  • Zentrale Versionskonstante FW_VERSION in config.h eingeführt —
+    speist Boot-Banner (main.cpp) und GET /api/ota. [P-SW02]
+
+  KONSISTENZ (kein Funktionsbruch):
+  • Versionsstrings aller Datei-Kopfzeilen, Boot-Banner, Dashboard-
+    Titel/-Footer und Doku auf v5.4.1 vereinheitlicht.
+  • Vollständiger Build verifiziert (pio run + pio run -t buildfs),
+    Partitionstabelle rechnerisch und im generierten partitions.bin
+    geprüft, Magic-Bytes beider Images bestätigt (firmware.bin=0xE9,
+    littlefs.bin≠0xE9).
 
 ─── v5.3 → v5.4 ─────────────────────────────────────────────────
 
@@ -981,12 +1136,19 @@ P-SW19 | LAGESENSOR (level.h/.cpp)  [NEU v5.4]
     clock_set_epoch bool, 64-Bit-Zeitbasis, platformio.ini gepinnt.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-ERSTELLTE QUELLDATEIEN (Stand v5.4)
+ERSTELLTE QUELLDATEIEN (Stand v5.4.1)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   ✓ platformio.ini            (gepinnte Abhängigkeiten; optional
                                BMS_USE_CAN für CAN-Build, siehe P-SW17)
-  ✓ partitions_16mb.csv       (kein OTA, unverändert)
-  ✓ src/config.h              (v5.3: GPIO 1/2 produktiv (DS3231),
+  ✓ partitions_16mb.csv       (GEÄNDERT v5.4.1: Dual-App-OTA-Layout —
+                               otadata + ota_0/ota_1 statt factory,
+                               spiffs auf 8000k, siehe P-SW01/P-SW20)
+  ✓ src/ota.h      ✓ src/ota.cpp      (NEU v5.4.1: Web-OTA, Firmware-
+                               & Dashboard-Upload per Browser, Update.h,
+                               Magic-Byte-Schutz, deferred Reboot,
+                               siehe L-SW22/P-SW20)
+  ✓ src/config.h              (v5.4.1: FW_VERSION-Konstante;
+                               v5.3: GPIO 1/2 produktiv (DS3231),
                                RGB-Rundlauf-Konstanten, DEFAULT_TZ statt
                                CLOCK_MEZ_OFFSET_SEC, GPIO 4/5 Renogy
                                WR-Status (GPIO_WR_LED_POWER/ALARM,
@@ -1033,12 +1195,19 @@ ERSTELLTE QUELLDATEIEN (Stand v5.4)
                                DST-korrekt; Routenreihenfolge siehe P-SW12;
                                v5.3: Wechselrichter-Status-LED im System-Tab;
                                v5.4: vier Lagesensor-Routen /api/level*
-                               nachgetragen, siehe P-SW12/P-SW19)
-  ✓ src/main.cpp              (v5.4: level_init()/level_task eingebunden)
+                               nachgetragen, siehe P-SW12/P-SW19;
+                               v5.4.1: GET/POST /api/ota registriert,
+                               ota.h eingebunden, siehe P-SW20)
+  ✓ src/main.cpp              (v5.4: level_init()/level_task eingebunden;
+                               v5.4.1: ota_init() nach webserver_init(),
+                               ota_tick() in loop(), Boot-Banner nutzt
+                               FW_VERSION)
   ✓ data/index.html           (GEÄNDERT v5.1: Zeitzonen-Auswahl im
                                Einstellungen-Tab, dynamisches MEZ/MESZ-Label;
                                Dashboard ohne Zellspannungen, 6 Metriken;
                                v5.3: dreistufige WR-Status-LED im System-Tab;
                                v5.4: neuer Tab "Lage" — Libelle, Keile,
-                               Kalibrierung, Konfigurationsformular)
+                               Kalibrierung, Konfigurationsformular;
+                               v5.4.1: Firmware-Update-Karte im System-Tab
+                               (Web-OTA, Fortschritt, Reconnect), siehe P-SW13)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
