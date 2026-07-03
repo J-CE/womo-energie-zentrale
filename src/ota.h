@@ -1,5 +1,5 @@
 // ============================================================
-//  ota.h — Womo Energy Core v5.4.1
+//  ota.h — Womo Energy Core v5.5.1
 //  Web-OTA: Firmware- und Dashboard-Update per Browser-Upload
 //
 //  Zwei Update-Typen (POST /api/ota?type=…):

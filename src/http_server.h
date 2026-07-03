@@ -1,5 +1,5 @@
 // ============================================================
-//  http_server.h — Womo Energy Core v5.4.1
+//  http_server.h — Womo Energy Core v5.5.1
 //  AsyncWebServer-Interface: REST-API + WebSocket-Broadcast
 //
 //  Endpunkte:
