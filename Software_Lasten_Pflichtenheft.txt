@@ -1,11 +1,11 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║     LASTEN- UND PFLICHTENHEFT — SOFTWARE                        ║
-║     Womo Energy Core v5.4.1                                      ║
-║     Stand: DS3231-RTC produktiv + CAN-BMS-Alternative +          ║
-║            RGB-Rundlauf-Encoding + Renogy-NVS-Wechselrichter +  ║
-║            Landstrom-Spannungsteiler + BMS direkt am GPS-Port + ║
-║            Lagesensor (MMA8452Q, elektronische Wasserwaage) +   ║
-║            Web-OTA (Firmware- & Dashboard-Update per Browser)   ║
+║     Womo Energy Core v5.5                                        ║
+║     Stand: Schaltkriterien-Redesign (nur harte AUS-Bedingungen, ║
+║            Float-Erkennung, WR nur manuell EIN) + D+-Pegel-Fix  ║
+║            (Active-HIGH) + Lagesensor Überkopf-Einbau/Fehler-   ║
+║            toleranz + persistentes Manuell-AUS + Web-OTA +      ║
+║            Lagesensor (MMA8452Q) + Renogy-NVS-Wechselrichter    ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -37,52 +37,59 @@ L-SW02 | DATENAKQUISITION MPPT  [GEÄNDERT]                  [MUSS]
   (Senden) laufen parallel auf UART2. Siehe P-SW04 und P-SW09.
   HINWEIS: VictronConnect TX-Modus konfigurieren (→ "VE.Direct").
 
-L-SW03 | SCHALTLOGIK D+-RELAIS (KÜHLSCHRANK)  [GEÄNDERT]   [MUSS]
-  EIN  wenn: SoC >= 95% UND PV(MA) >= 150W UND kein Landstrom
+L-SW03 | SCHALTLOGIK D+-RELAIS (KÜHLSCHRANK)  [GEÄNDERT v5.5][MUSS]
+  EIN  wenn: SoC >= 95% (socDPlusOn)
+             UND (PV(MA) >= 100W (pvDPlusMinW) ODER MPPT-Ladezustand
+                  Float — im Float ist der Akku voll, Überschuss da)
+             UND kein Landstrom
              UND BMS-Daten gültig UND nicht veraltet (> 60s)
              UND MPPT stabil (nach Recovery-Debounce)
   HALT wenn: bereits EIN, keine AUS-Bedingung erfüllt (Hysterese-Band)
-  AUS  wenn: (harte Bedingungen — sofort, auch während Mindestlaufzeit)
-             BMS-Daten ungültig oder veraltet (> 60s kein Frame)
-             ODER MPPT ungültig/Timeout (> 60s kein Frame)
-             ODER Landstrom erkannt
-             (weiche Bedingungen — durch Mindestlaufzeit hemmbar)
-             (PV(MA) < 100W UND SoC < socDPlusHigh) ODER SoC < 80%
-  Bedeutung: Bei hohem SoC (>= socDPlusHigh) bleibt der Kühlschrank
-    auch bei vorübergehendem PV-Einbruch eingeschaltet. Erst wenn der
-    SoC unter socDPlusHigh fällt, kann ein PV-Einbruch zum AUS führen.
-    Unter 80% SoC (hart) schaltet ab, unabhängig von PV.
-  Hysterese: 15% SoC (EIN 95 / hart-AUS 80), PV: 50W (EIN 150 / AUS 100).
-  Flatter-Schutz: Zustandsänderung erst nach 10 stabilen Zyklen (20s).
+  AUS  wenn (ausnahmslos HART — sofort, ohne Debounce):
+             Landstrom erkannt
+             ODER BMS-Daten ungültig oder veraltet (> 60s kein Frame)
+             ODER SoC < 80% (socDPlusOff)
+  v5.5: KEIN weiches PV-basiertes AUS mehr (socDPlusHigh und
+    pvThresholdOff entfallen). Einmal eingeschaltet, läuft D+ bis
+    eine harte Bedingung greift — der Kühlschrank zieht also abends/
+    nachts planmäßig den Akku von 95% bis 80% (bewusste Entscheidung).
+  v5.5: MPPT-Ausfall ist KEINE AUS-Bedingung mehr. Ein VE.Direct-
+    Glitch bei vollem Akku schaltet nichts mehr ab; ungültige MPPT-
+    Daten blockieren nur die EIN-Seite (PV/Float nicht bewertbar).
+  v5.5: D+-Mindestlaufzeit entfallen — sie hemmte ausschließlich
+    weiche AUS-Gründe, die es nicht mehr gibt.
+  Hysterese: 15% SoC (EIN 95 / hart-AUS 80).
+  Flatter-Schutz: EIN-Transition erst nach 10 stabilen Zyklen (20s);
+    harte AUS-Gründe schalten sofort (B-11-Express-Route).
   PV-Glättung: gleitender Mittelwert über 30 Sekunden (15 × 2s).
-  Mindestlaufzeit D+ (Kompressor-Schutz): nach dem Einschalten werden
-    weiche AUS-Bedingungen für 5 Minuten gehemmt. Harte greifen sofort.
   MPPT-Recovery-Debounce: 5 aufeinanderfolgende gültige Frames (≈ 10s)
     erforderlich, bevor MPPT nach Timeout wieder als "gesund" gilt.
 
-L-SW04 | SCHALTLOGIK GEL-LADER (STARTERBATTERIE)  [GEÄNDERT][MUSS]
-  EIN  wenn: SoC >= 82% UND PV(MA) >= 60W
+L-SW04 | SCHALTLOGIK GEL-LADER (STARTERBATTERIE) [GEÄNDERT v5.5][MUSS]
+  EIN  wenn: SoC >= 95% (socGelOn)
+             UND (PV(MA) >= 20W (pvGelMinW) ODER MPPT-Ladezustand Float)
+             UND kein Landstrom
              UND BMS-Daten gültig UND nicht veraltet (> 60s)
              UND MPPT stabil (nach Recovery-Debounce)
   HALT wenn: bereits EIN, keine AUS-Bedingung erfüllt
-  AUS  wenn: (PV(MA) < pvGelMinW UND SoC < socGelHigh) ODER SoC < 82%
-  Bedeutung: Bei hohem SoC (>= socGelHigh) läuft der Gel-Lader auch
-    ohne PV weiter. Fällt der SoC unter socGelHigh (Default 90%), hält
-    nur noch ausreichende PV-Leistung den Lader am Laufen. Unter 82%
-    (hart) schaltet sofort ab.
-  Kein separater socGelOff-Parameter — harte AUS-Schwelle = socGelOn.
+  AUS  wenn (ausnahmslos HART — sofort, ohne Debounce):
+             Landstrom erkannt (NEU v5.5)
+             ODER BMS-Daten ungültig oder veraltet (> 60s kein Frame)
+             ODER SoC < 80% (socGelOff, eigener Parameter NEU v5.5)
+  v5.5: Struktur identisch zu L-SW03 — kein weiches PV-AUS mehr
+    (socGelHigh entfällt), MPPT-Ausfall keine AUS-Bedingung mehr.
+  v5.5: Defaults geändert: socGelOn 82→95%, pvGelMinW 60→20W.
   Gleichzeitiger Betrieb mit D+-Relais möglich und gewollt.
-  Kein Landstrom-Check (Gel-Lader unabhängig vom Netzstrom).
 
-L-SW05 | SCHALTLOGIK WECHSELRICHTER REMOTE  [GEÄNDERT v5.3] [SOLLTE]
-  EIN  wenn: SoC >= socWROn
-             UND BMS-Daten gültig UND nicht veraltet (> 60s)
-  HALT wenn: bereits EIN, keine AUS-Bedingung erfüllt
-  AUS  wenn: (hart) BMS ungültig/veraltet
-             (weich) SoC < socWROff
-  Keine PV-Bedingung — WR-Schaltung ausschließlich SoC-basiert.
-  Schwellwerte (socWROn/Off) unabhängig von D+ konfigurierbar.
-  Default: 95/80% SoC. Flatter-Schutz: 10 Zyklen.
+L-SW05 | SCHALTLOGIK WECHSELRICHTER REMOTE [GEÄNDERT v5.5] [SOLLTE]
+  KEIN Auto-EIN (v5.5): Einschalten ausschließlich manuell über das
+  Dashboard (L-SW23) — ohne Deadman-Timer. socWROn entfällt.
+  Die Automatik darf den WR nur noch ABschalten; diese Bedingungen
+  gelten AUCH während Manuell-EIN und beenden ihn (Sicherheitsnetz,
+  da der Timer entfällt):
+  AUS  wenn: (hart)  BMS ungültig/veraltet (> 60s kein Frame)
+             (weich) SoC < socWROff (Default 80%, debounced 10 Zyklen)
+  Keine PV-Bedingung, kein MPPT-Check, kein Landstrom-Check.
   v5.3: Landstrom-Bedingung entfernt. Hardwarewechsel von Edecoa
   (ohne NVS) auf Renogy 12V/2000W MIT eingebauter Netzvorrang-
   schaltung (NVS) — das Gerät übernimmt die AC-seitige Umschaltung
@@ -92,7 +99,8 @@ L-SW05 | SCHALTLOGIK WECHSELRICHTER REMOTE  [GEÄNDERT v5.3] [SOLLTE]
 L-SW06 | LANDSTROM-ERKENNUNG                               [MUSS]
   Hardware-Signal (Spannungsteiler 2k/1,5k an 5V-Rail) wird als
   GPIO-Pin eingelesen. HIGH = Landstrom vorhanden.
-  Bei Landstrom wird das D+-Relais sofort deaktiviert. Die
+  Bei Landstrom werden D+-Relais und Gel-Lader (v5.5) sofort
+  deaktiviert. Die
   WR-Remote-Logik (L-SW05) ist seit v5.3 unabhängig von Landstrom
   (Renogy-NVS übernimmt die AC-Umschaltung selbst).
 
@@ -164,7 +172,8 @@ L-SW14 | WEBINTERFACE — EINSTELLUNGEN  [GEÄNDERT]          [MUSS]
   Änderungen wirken ohne Neustart sofort auf die Schaltlogik.
   Plausibilitätsgrenzen werden geprüft (Wertebereichsgrenzen);
   keine erzwungene ON > OFF Cross-Validierung mehr.
-  WR-Parameter (socWROn/Off) sind unabhängig von D+ konfigurierbar.
+  WR-Parameter (socWROff) ist unabhängig von D+ konfigurierbar;
+  socWROn entfällt seit v5.5 (WR-EIN nur manuell, siehe L-SW05).
 
 L-SW15 | PARAMETER-PERSISTENZ (NVS)                       [MUSS]
   Alle Schwellwerte und Betriebsparameter werden im NVS-Flash
@@ -260,7 +269,8 @@ L-SW21 | LAGESENSOR / ELEKTRONISCHE WASSERWAAGE  [NEU v5.4] [KANN]
   bekommt den größten Keil.
   Konfigurierbar: Spurweite (800–3000mm), Radstand (1500–8000mm),
   Einbaudrehung des Sensors (0/90/180/270°), Achsen-Invertierung,
-  Modul aktiv/inaktiv.
+  Überkopf-Einbau (flipZ, NEU v5.5 — für kopfüber montierte
+  Platine, s. P-SW19), Modul aktiv/inaktiv.
   Kalibrierung: aktuelle Lage als "eben" (Null-Offset) speicherbar
   und zurücksetzbar — gleicht eine nicht exakt waagerechte Sensor-
   montage aus.
@@ -293,6 +303,27 @@ L-SW22 | WEB-OTA (FIRMWARE- & DASHBOARD-UPDATE)  [NEU v5.4.1] [SOLLTE]
   Namespaces — siehe P-SW20 / Anschluss-Anleitung).
   Implementierungsdetails siehe P-SW20.
 
+
+L-SW23 | MANUELLER AKTOR-OVERRIDE  [NEU v5.4, GEÄNDERT v5.5] [SOLLTE]
+  Jeder Aktor (D+, Gel-Lader, WR-Remote) ist im Dashboard (System-
+  Tab) per Segmentbuttons Auto/Ein/Aus manuell übersteuerbar
+  (POST /api/manual, {"actuator","mode"}).
+  Manuell EIN (D+/Gel): übersteuert JEDE Automatik-Bedingung inkl.
+    Hart-Interlocks (bewusste Design-Entscheidung v5.4). Sicherheits-
+    netz: Deadman-Timeout (manualTimeoutMin, Default 30 min, Refresh
+    bei jedem Befehl) — bei Ablauf Rückfall in die Automatik. Nie
+    persistent: Reboot = Auto.
+  Manuell EIN (WR, v5.5): OHNE Deadman-Timer. Läuft bis zum nächsten
+    Nutzerbefehl ODER bis eine Auto-AUS-Bedingung aus L-SW05 greift —
+    diese beenden den Manual-Modus (Sicherheitsnetz ersetzt Timer).
+    Nie persistent.
+  Manuell AUS (alle Aktoren, v5.5): DAUERHAFT — kein Timer, kein
+    automatischer Rückfall in die Automatik. NVS-persistent
+    (Namespace "logic", Schlüssel manOff0..2): überlebt Reboot und
+    Watchdog-Reset. AUS ist die sichere Richtung, Persistenz daher
+    unbedenklich. Aufhebung nur durch expliziten Auto-/Ein-Befehl.
+  Anzeige: Reason-String je Aktor ("MANUAL EIN (Auto in Ns)",
+    "MANUAL AUS (dauerhaft)", …) + aktiver Segmentbutton.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 TEIL 2 — PFLICHTENHEFT (Wie ist die Software umgesetzt?)
@@ -338,7 +369,7 @@ P-SW01 | PLATTFORM UND ENTWICKLUNGSUMGEBUNG  [GEÄNDERT v5.1]
 P-SW02 | PROJEKTSTRUKTUR (QUELLDATEIEN)  [GEÄNDERT v5.1]
   src/config.h          GPIO-Konstanten + DEFAULT_-Parameter +
                         LOGIC_-Tuning-Konstanten (MA, Recovery, Min-on)
-  src/params.h/.cpp     NVS-Verwaltung (12 Parameter)
+  src/params.h/.cpp     NVS-Verwaltung (10 Parameter)
   src/bms.h/.cpp        JK-BMS RS485 Parser (ID-Tabelle, 16-Bit-CHK)
   src/bmscan.h/.cpp     JK-BMS CAN-Parser — Compile-Zeit-Alternative
                         zu bms.cpp, identischer JSON-Output (v5.1, neu)
@@ -462,7 +493,7 @@ P-SW07 | DATENSTRUKTUREN  [GEÄNDERT]
   IOState (io.h): Landstrom-Flag, Zustände aller 4 Aktoren.
   LogEntry (logger.h): 32 Byte, __attribute__((packed)), static_assert.
     Timestamp = UTC-Epoch intern (Anzeige in lokaler Zeitzone, DST).
-  Params (params.h): 12 NVS-Parameter, global als g_params.
+  Params (params.h): 10 NVS-Parameter, global als g_params.
     Neu in v5.0: socDPlusHigh, socGelHigh.
     Entfernt: socGelOff (= socGelOn), pvWRThresholdOn, pvWRThresholdOff.
   Zeit (clock.cpp): DS3231-RTC führend (I2C), NVS-Fallback, Spinlock-
@@ -509,32 +540,42 @@ P-SW09 | VE.DIRECT PROTOKOLL-IMPLEMENTIERUNG  [GEÄNDERT]
     ignoriert (Non-blocking; Text-Protokoll hat Priorität).
     UART2 TX: GPIO 42 (3,3V, kein Pegelwandler erforderlich).
 
-P-SW10 | SCHALTLOGIK DETAIL (logic.cpp)  [GEÄNDERT]
+P-SW10 | SCHALTLOGIK DETAIL (logic.cpp)  [GEÄNDERT v5.5]
   Hysterese: want = aktueller Aktor-Zustand. EIN-Transition nur
-    wenn cur=false und alle EIN-Bedingungen erfüllt.
+    wenn cur=false und alle EIN-Bedingungen erfüllt (debounced).
     AUS-Bedingungen dominieren immer.
-  AUS-Priorität (first-error-wins) für D+-Relais:
-    1. BMS ungültig/veraltet   (hart — auch während Mindestlaufzeit)
-    2. MPPT ungültig/Timeout   (hart)
-    3. Landstrom               (hart)
-    4. (PV(MA)<pvThreshOff UND SoC<socDPlusHigh) ODER SoC<socDPlusOff
-       (weich — bei D+: durch Mindestlaufzeit hemmbar)
-  AUS-Priorität für Gel-Lader:
+  EIN-PV-Bedingung (D+/Gel): pv_ok = mppt_ok UND
+    (PV(MA) >= Schwelle ODER chargeState == MPPT_CS_FLOAT).
+    MPPT-Ausfall blockiert damit nur die EIN-Seite.
+  AUS-Priorität (first-error-wins) für D+-Relais — alle HART,
+    sofort ohne Debounce (B-11-Express-Route):
+    1. BMS ungültig/veraltet
+    2. Landstrom
+    3. SoC < socDPlusOff
+  AUS-Priorität für Gel-Lader — alle HART:
+    1. BMS ungültig/veraltet
+    2. Landstrom               (NEU v5.5)
+    3. SoC < socGelOff
+  AUS-Priorität für WR-Remote (kein Auto-EIN, s. L-SW05; gilt auch
+    während Manuell-EIN und beendet diesen):
     1. BMS ungültig/veraltet   (hart)
-    2. MPPT ungültig/Timeout   (hart)
-    3. (PV(MA)<pvGelMinW UND SoC<socGelHigh) ODER SoC<socGelOn
-       (weich)
-  AUS-Priorität für WR-Remote:
-    1. BMS ungültig/veraltet   (hart)
-    2. Landstrom               (hart)
-    3. SoC < socWROff          (weich)
+    2. SoC < socWROff          (weich, debounced)
+    HINWEIS: Die früher hier gelistete Landstrom-Bedingung war seit
+    v5.3 aus dem Code entfernt (Renogy-NVS) — Doku-Drift in P-SW10,
+    korrigiert in v5.5.
+  v5.5 ENTFERNT: MPPT-Timeout als AUS-Bedingung (D+/Gel), weiche
+    PV-AUS-Formeln (socDPlusHigh/pvThresholdOff/socGelHigh),
+    D+-Mindestlaufzeit (LOGIC_DPLUS_MIN_ON_MS — hemmte nur weiche
+    Gründe, die es nicht mehr gibt), WR-Auto-EIN (socWROn).
+  Manual-Semantik (v5.5): siehe L-SW23. Persistentes Manuell-AUS in
+    NVS "logic"/manOff0..2 — Restore in logic_init(), Schreiben in
+    logic_set_manual() IMMER außerhalb des Spinlocks (Flash-Write
+    unter taskENTER_CRITICAL unzulässig).
   PV-Glättung: MA über LOGIC_PPV_MA_WINDOW = 15 Samples (30s).
     Bei MPPT-Ausfall: 0 in Puffer schieben → gradueller Rückgang.
   MPPT-Recovery-Debounce: mppt_ok erst nach LOGIC_MPPT_RECOVERY_MIN
     = 5 aufeinanderfolgenden gültigen Frames (≈ 10s).
-  D+-Mindestlaufzeit: LOGIC_DPLUS_MIN_ON_MS = 300s (5min).
-    Weiche AUS-Gründe gehemmt; harte sofort.
-  Staleness-Timeout: BMS_STALE_TIMEOUT_MS = 60s (5 v4.x: 10s).
+  Staleness-Timeout: BMS_STALE_TIMEOUT_MS = 60s (v4.x: 10s).
   Debounce-Zähler: db_dplus, db_gel, db_wr als int8_t, ±N Zyklen.
   Reason-Strings: char[64]-Puffer + portMUX Spinlock (kein Race).
 
@@ -635,35 +676,38 @@ P-SW13 | DASHBOARD (data/index.html)  [GEÄNDERT v5.4]
     - Polling 4Hz (250ms) nur während Tab aktiv ist, sonst inaktiv
       (kein unnötiger I2C-Traffic im Hintergrund)
   Einstellungen-Tab:
-    - Formular für alle 12 NVS-Parameter
+    - Formular für alle 10 NVS-Parameter
     - Speichern → POST /api/params, Fabrik-Reset → POST /api/reset
     - Zeitzonen-Auswahl (Dropdown gängiger EU-Zonen + benutzerdef.
       POSIX-String) → GET/POST /api/tz, zeigt aktive Abkürzung+Offset
   Zeit-Sync: POST /api/time bei Connect und alle 5 min.
 
-P-SW14 | VARIABLE PARAMETER (NVS, Namespace "womo_cfg")  [GEÄNDERT]
+P-SW14 | VARIABLE PARAMETER (NVS, Namespace "womo_cfg") [GEÄNDERT v5.5]
+  10 Parameter (v5.5: 13→10):
   Key                   Default   Einheit  Grenzen       Gruppe
   ─────────────────────────────────────────────────────────────────
   socDPlusOn            95        %        50–100  }
-  socDPlusOff           80        %        20–95   } D+-Relais
-  socDPlusHigh          90        %        50–100  } (neu v5.0)
-  pvThresholdOn         150       W        10–2000 }
-  pvThresholdOff        100       W        0–1990  }
+  socDPlusOff           80        %        20–99   } D+-Relais
+  pvDPlusMinW           100       W        10–2000 } (neu v5.5)
   ─────────────────────────────────────────────────────────────────
-  socGelOn              82        %        50–100  }
-  socGelHigh            90        %        50–100  } Gel-Lader
-  pvGelMinW             60        W        0–500   } (neu v5.0)
+  socGelOn              95        %        50–100  }
+  socGelOff             80        %        20–99   } Gel-Lader
+  pvGelMinW             20        W        0–500   } (socGelOff neu)
   ─────────────────────────────────────────────────────────────────
-  socWROn               95        %        50–100  }
-  socWROff              80        %        20–95   } Wechselrichter
+  socWROff              80        %        20–99     Wechselrichter
   ─────────────────────────────────────────────────────────────────
   relayDebounceCycles   10        Zyklen   1–60
   logIntervalMs         900000    ms       60000–3600000
+  manualTimeoutMin      30        min      1–240   (nur EIN D+/Gel)
   ─────────────────────────────────────────────────────────────────
   Plausibilitätsgrenzen werden geprüft (Wertebereich je Parameter).
   Keine erzwungene ON > OFF Cross-Validierung (entfällt ab v5.0).
-  socGelOff entfällt — harte AUS-Schwelle = socGelOn (82%).
-  pvWRThresholdOn/Off entfallen — WR ist rein SoC-gesteuert.
+  v5.5 ENTFERNT: socDPlusHigh, pvThresholdOn/Off (→ pvDPlusMinW),
+  socGelHigh, socWROn. Migration in params_init(): neue Schlüssel
+  mit Defaults anlegen, entfallene per prefs.remove() aufräumen.
+  Bestehende Werte von socGelOn/pvGelMinW bleiben erhalten — nach
+  dem Update im Dashboard prüfen (neue Defaults 95%/20W) oder
+  Werks-Reset ausführen.
 
 P-SW15 | SICHERHEITS-IMPLEMENTIERUNGEN  [GEÄNDERT]
   1.  Watchdog zweistufig: HW-WDT(4s) + SW-WDT (BMS/MPPT/Logger).
@@ -831,6 +875,15 @@ P-SW19 | LAGESENSOR (level.h/.cpp)  [NEU v5.4]
   Hochachse, falls der Sensor nicht achsenparallel zum Fahrzeug
   verbaut werden konnte. Zusätzlich optionale Achsen-Invertierung
   (invRoll/invPitch) für spiegelverkehrten Einbau.
+  Überkopf-Einbau (c_flipZ, NEU v5.5): Sensor kopfüber montiert
+  (az ≈ −1g) → Roll läuft auf ±180°. Diese Orientierung kann WEDER
+  durch c_rot (Hochachse) noch durch inv* abgebildet und darf NICHT
+  per Null-Kalibrierung "gelöst" werden: atan2 springt bei ±180° um
+  360° → tan(roll) explodiert, Keilwerte werden unbrauchbar. flipZ
+  negiert ay/az vor der Neigungsberechnung (Spiegelung um die
+  Längsachse) — Roll-/Pitch-Vorzeichen bleiben korrekt; andere
+  Überkopf-Orientierungen ergeben sich kombiniert mit c_rot/inv*.
+  Beim Umschalten wird die EMA neu initialisiert (f_init=false).
   Kalibrierung (Null-Offset): aktueller Roh-Roll/Pitch wird als
   "eben" in NVS gespeichert (zRoll/zPitch) und von allen folgenden
   Messungen abgezogen. Reset löscht den Offset (zurück auf 0/0).
@@ -842,20 +895,29 @@ P-SW19 | LAGESENSOR (level.h/.cpp)  [NEU v5.4]
   alle anderen Räder gilt keil_i = max(z) − z_i (negative Werte auf
   0 geklemmt). level_to_json() liefert wedge[] in mm; das Dashboard
   zeigt die Anzeige in cm (Division durch 10 im Frontend).
-  "Eben"-Schwelle: |roll| UND |pitch| < LEVEL_TOLERANCE_DEG (0,3°).
+  "Eben"-Schwelle: |roll| UND |pitch| < LEVEL_TOLERANCE_DEG (1,2°).
+  (Doku-Drift korrigiert v5.5: hier stand 0,3°, config.h führte seit
+  jeher 1,2f — config.h ist der gelebte Stand.)
   Bus-Koordination: alle I2C-Transaktionen (Erkennung, Setup, Poll)
   laufen unter g_i2cMutex (siehe P-SW06) — DS3231 und Lagesensor
   teilen sich GPIO 1/2, Zugriff aus unterschiedlichen Tasks/Cores.
   Threading: level_task (Core 0, ~4Hz/250ms) pollt den Sensor und
   legt das Ergebnis in einem per-portMUX geschützten Cache ab.
+  Fehlertoleranz (NEU v5.5): valid kippt erst nach 4 aufeinander-
+  folgenden Fehlversuchen (≈1s) auf false; bis dahin bleiben die
+  letzten gültigen Werte stehen. Vorher setzte JEDER einzelne
+  verpasste g_i2cMutex-Take (Kollision mit dem DS3231-Zugriff des
+  Clock-Tasks, Timeout war 40ms) valid=false — die Dashboard-
+  Libelle sprang dadurch regelmäßig kurz grau/mittig ("Sensor
+  liest …"). Mutex-Timeout im Poll zusätzlich 40→100ms.
   HTTP-Handler und WebSocket-Broadcast lesen ausschließlich den
   Cache — kein I2C-Zugriff im Web-/AsyncTCP-Kontext.
   Hotplug-Verhalten: ist das Modul aktiviert aber kein Sensor
   erkannt, versucht level_task alle 3s erneut die Erkennung (z. B.
   für nachträglichen Einbau ohne Neustart).
   Persistenz: NVS-Namespace "level" (getrennt von "womo_cfg" und
-  "clock") — Spurweite, Radstand, Rotation, Invertierung, Enabled,
-  Null-Offset.
+  "clock") — Spurweite, Radstand, Rotation, Invertierung, flipZ
+  (v5.5), Enabled, Null-Offset.
   Optional/ausfalltolerant: Modul ohne Einfluss auf Schaltlogik,
   RGB-LED oder andere Subsysteme. Fehlender oder defekter Sensor
   zeigt sich nur im eigenen Dashboard-Tab (present=false), sonst
@@ -939,6 +1001,68 @@ P-SW20 | WEB-OTA (ota.h/.cpp)  [NEU v5.4.1]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ÄNDERUNGSPROTOKOLL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+─── v5.4.1 → v5.5 ───────────────────────────────────────────────
+
+  D+-PEGEL-FIX (KRITISCH):
+  • RELAY_D_PLUS_ACTIVE LOW→HIGH: Der in der Anschluss_Anleitung
+    dokumentierte Hardware-Umbau auf das Joy-it COM-MOSFET (Active-
+    HIGH) war in config.h nie nachgezogen worden. Folge im Feld:
+    D+ EIN/AUS invertiert UND D+ ab Boot aktiv (io_init() setzte
+    hartkodiert HIGH als "sicher" nach alter Active-LOW-Logik).
+    io_init() leitet die Fail-Safe-Pegel jetzt für ALLE Ausgänge
+    aus den *_ACTIVE-Makros ab (!ACTIVE), nie mehr hartkodiert.
+    [P-SW15, Anschluss_Anleitung MODUL 5]
+
+  SCHALTKRITERIEN-REDESIGN (D+/GEL/WR):
+  • D+/Gel: nur noch HARTE AUS-Bedingungen (Landstrom, BMS ungültig/
+    veraltet, SoC<Off). Weiches PV-AUS, socHigh-Konzept und D+-
+    Mindestlaufzeit entfallen. [L-SW03, L-SW04, P-SW10]
+  • MPPT-Ausfall ist KEINE AUS-Bedingung mehr — ein VE.Direct-
+    Glitch bei vollem Akku schaltete bisher Kühlschrank und Gel-
+    Lader sofort hart ab, obwohl energetisch nichts passiert war.
+    mppt_ok bleibt EIN-Voraussetzung (PV/Float sonst nicht
+    bewertbar). [L-SW03, L-SW04, P-SW10]
+  • EIN-PV-Bedingung neu: PV(MA) >= Schwelle ODER MPPT-Ladezustand
+    Float (CS=5) — im Float ist der Akku voll und Überschuss
+    vorhanden. [L-SW03, L-SW04, P-SW10]
+  • Gel: Landstrom neu als hartes AUS; eigener socGelOff-Parameter
+    (bisher harte AUS-Schwelle = socGelOn). Defaults: socGelOn
+    82→95%, pvGelMinW 60→20W. [L-SW04, P-SW14]
+  • WR: KEIN Auto-EIN mehr — Einschalten nur manuell. socWROn
+    entfällt. Auto-AUS (BMS hart, SoC<WROff weich) gilt auch
+    während Manuell-EIN und beendet ihn. [L-SW05, L-SW23, P-SW10]
+  • Parameterbereinigung 13→10: −socDPlusHigh −pvThresholdOn/Off
+    −socGelHigh −socWROn, +pvDPlusMinW +socGelOff. NVS-Migration
+    in params_init() (neue Keys anlegen, alte entfernen).
+    [P-SW14, L-SW14]
+
+  MANUAL-SEMANTIK (v5.5):
+  • Deadman-Timeout gilt nur noch für Manuell-EIN von D+/Gel.
+    WR-Manuell-EIN ohne Timer (Sicherheitsnetz = Auto-AUS-Bed.).
+    Manuell-AUS dauerhaft: kein Timer, kein Rückfall auf Auto,
+    NVS-persistent (Namespace "logic", manOff0..2, Restore in
+    logic_init(), Flash-Write stets außerhalb des Spinlocks).
+    Aufhebung nur durch expliziten Auto-/Ein-Befehl. Der v5.4-
+    Override war zudem bisher nicht normativ dokumentiert —
+    nachgeholt als L-SW23. [L-SW23, P-SW10]
+
+  LAGESENSOR:
+  • Überkopf-Einbau (flipZ): behebt Roll ≈ ±180° bei kopfüber
+    montierter Platine. Negiert ay/az vor der Neigungsberechnung;
+    NICHT per Null-Kalibrierung lösbar (atan2-Sprung bei ±180° →
+    tan explodiert). Neue Checkbox im Lage-Tab, NVS-Key "flipZ",
+    /api/levelcfg erweitert. [L-SW21, P-SW19]
+  • Fehlertoleranz Libelle: valid erst nach 4 Fehlversuchen in
+    Folge (≈1s) false — einzelne g_i2cMutex-Kollisionen mit dem
+    Clock-Task ließen die Anzeige bisher bei 4Hz kurz grau/mittig
+    springen. Mutex-Timeout 40→100ms. [P-SW19]
+
+  DOKU-KORREKTUREN:
+  • P-SW10: Landstrom stand noch als WR-AUS-Bedingung (Code seit
+    v5.3 ohne) — Drift entfernt.
+  • P-SW19: Eben-Schwelle 0,3°→1,2° (config.h-Wert ist der
+    gelebte Stand).
 
 ─── v5.4 → v5.4.1 ───────────────────────────────────────────────
 

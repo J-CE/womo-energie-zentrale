@@ -1,9 +1,11 @@
 // ============================================================
-//  io.cpp — Womo Energy Core v5.4
+//  io.cpp — Womo Energy Core v5.5
 //  GPIO-Treiber für alle Aktoren und Sensoren
 //
-//  Alle Ausgänge werden in io_init() explizit LOW gesetzt
-//  (Fail-Safe: kein Ausgang aktiv bei Reset/Boot).
+//  Alle Ausgänge werden in io_init() explizit auf ihren INAKTIVEN
+//  Pegel (!*_ACTIVE) gesetzt (Fail-Safe: kein Aktor aktiv bei
+//  Reset/Boot). v5.5-Fix: vorher hartkodierte Pegel — nach dem
+//  D+-Umbau auf Active-HIGH war D+ dadurch ab Boot EIN.
 //  io_read_landstrom(): INPUT (Spannungsteiler 2k/1,5k von 5V),
 //                       HIGH = Landstrom aktiv.
 // ============================================================
@@ -23,17 +25,16 @@ void io_init() {
     // bei Landstrom, sonst 0V (LOW). KEIN Pull-up — würde den Teiler verfälschen.
     pinMode(GPIO_LANDSTROM_SENSOR, INPUT);
 
-    // Ausgänge — zuerst sicheren Zustand setzen, dann pinMode
-    // D+ Relais: Active-LOW → HIGH = sicher (Relais abgefallen)
-    digitalWrite(GPIO_RELAY_D_PLUS,   HIGH);
+    // Ausgänge — zuerst sicheren (INAKTIVEN) Zustand setzen, dann
+    // pinMode. v5.5: Pegel IMMER aus den *_ACTIVE-Makros ableiten,
+    // nie hartkodieren — der D+-Boot-Bug entstand genau dadurch.
+    digitalWrite(GPIO_RELAY_D_PLUS,   !RELAY_D_PLUS_ACTIVE);   // MOSFET sperrt
     pinMode(GPIO_RELAY_D_PLUS,         OUTPUT);
 
-    // MOSFET Gel: Active-HIGH → LOW = sicher (MOSFET sperrt)
-    digitalWrite(GPIO_MOSFET_GEL,     LOW);
+    digitalWrite(GPIO_MOSFET_GEL,     !MOSFET_GEL_ACTIVE);     // MOSFET sperrt
     pinMode(GPIO_MOSFET_GEL,           OUTPUT);
 
-    // WR Remote Optokoppler: Active-HIGH → LOW = sicher
-    digitalWrite(GPIO_OPTO_WR_REMOTE, LOW);
+    digitalWrite(GPIO_OPTO_WR_REMOTE, !OPTO_WR_ACTIVE);        // Optokoppler aus
     pinMode(GPIO_OPTO_WR_REMOTE,       OUTPUT);
 
     // Status-LED
@@ -58,7 +59,7 @@ bool io_read_landstrom() {
 }
 
 void io_set_relay_dplus(bool on) {
-    // Active-LOW: ON → LOW, OFF → HIGH
+    // Pegel aus RELAY_D_PLUS_ACTIVE (v5.5: Active-HIGH, COM-MOSFET)
     digitalWrite(GPIO_RELAY_D_PLUS, on ? RELAY_D_PLUS_ACTIVE : !RELAY_D_PLUS_ACTIVE);
     g_io.relayDPlus = on;
     Serial.printf("[IO] D+ Relais: %s\n", on ? "EIN" : "AUS");

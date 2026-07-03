@@ -1,7 +1,7 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║   ANSCHLUSS-ANLEITUNG — WOMO ENERGY CORE / GODMODULE              ║
 ║   Sensoren & Aktoren, Modul für Modul                            ║
-║   Basis: Pflichtenheft v5.4.1 + config.h                         ║
+║   Basis: Pflichtenheft v5.5 + config.h                           ║
 ║   Stand: Hardware-Entscheidungen eingearbeitet —                 ║
 ║     • D+ und Gel-Lader über 2× Joy-it COM-MOSFET (IRF9540N)      ║
 ║     • JK-BMS direkt per UART-TTL am GPS-Port (kein MAX485        ║
@@ -297,6 +297,11 @@ und berechnet daraus die nötige Keilhöhe je Rad.
   Hochachse (0/90/180/270°) verbaut werden — die Drehung wird in der
   Lagesensor-Konfiguration im Dashboard ausgeglichen (kein Anschluss-
   oder Verkabelungsthema, reine Software-Einstellung).
+  Auch kopfüber montierte Platinen (Bauteilseite nach unten, Roll
+  zeigt dann ±180°) sind ab FW v5.5 zulässig: Checkbox "Überkopf-
+  Einbau" im Lage-Tab setzen — NICHT versuchen, die ±180° per
+  Null-Kalibrierung auszugleichen (Anzeige wird an der ±180°-
+  Sprungstelle unbrauchbar).
   Optional/ausfalltolerant: Sensor kann auch nachträglich angesteckt
   werden (level_task erkennt ihn alle 3s neu, falls noch nicht
   gefunden) — kein Neustart nötig, keine Auswirkung auf andere Module
@@ -370,6 +375,10 @@ NÖTIGE config.h-ÄNDERUNGEN
 ══════════════════════════════════════════════════════════════════
   // D+ über Joy-it COM-MOSFET (P-Kanal, High-Side, Active-HIGH):
   #define RELAY_D_PLUS_ACTIVE        HIGH        // war LOW
+  // ✓ UMGESETZT in Firmware v5.5 (config.h). Bis v5.4.1 stand hier
+  //   im Code noch LOW — Folge: D+ invertiert UND ab Boot aktiv.
+  //   io_init() leitet die Fail-Safe-Pegel seit v5.5 für alle
+  //   Ausgänge aus den *_ACTIVE-Makros ab.
 
   // Kein MAX485 mehr (BMS direkt am GPS-Port) → GPIO 15 entfällt:
   // #define GPIO_RS485_DE_RE        15          // ungenutzt, GPIO 15 frei
@@ -399,7 +408,7 @@ PRÜF-CHECKLISTE VOR ERSTINBETRIEBNAHME
     bei Stille TX/RX (Pin 2/3) tauschen
 [ ] VE.Direct-RX-Teiler 1kΩ+2kΩ, +Vcc NICHT verbunden
 [ ] VE.Direct-TX (GPIO 42) direkt, VictronConnect "VE.Direct"
-[ ] config.h: RELAY_D_PLUS_ACTIVE = HIGH
+[x] config.h: RELAY_D_PLUS_ACTIVE = HIGH (umgesetzt in FW v5.5)
 [ ] D+: 1A-Sicherung + SR560-Sperrdiode (Ring → Kühlschrank)
 [ ] Gel: 3A-Sicherung + 1Ω/10W + SR560-Sperrdiode (Ring → Gel+)
 [ ] Gel-Widerstand mit Luftspalt montiert

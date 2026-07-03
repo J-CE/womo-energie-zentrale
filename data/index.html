@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     index.html — Womo Energy Core v5.4.1
+     index.html — Womo Energy Core v5.5
      Dashboard: BMS · MPPT · Schaltlogik · Logging · Parameter · Zeitzone
      Eingebettet in LittleFS, erreichbar via http://192.168.4.1
      WLAN AP: GODMODULE (Passwort: BM-hy678)
@@ -152,7 +152,7 @@
 <header>
   <div class="brand">
     <div class="logo">G</div>
-    <div><h1>GODMODULE · Energy Core</h1><div class="sub">Womo Energy Core v5.4.1</div></div>
+    <div><h1>GODMODULE · Energy Core</h1><div class="sub">Womo Energy Core v5.5</div></div>
   </div>
   <div class="pills">
     <span class="pill"><span id="dWs" class="dot"></span><span id="tWs">Verbinde…</span></span>
@@ -402,6 +402,8 @@
             <label style="display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" id="lvInvR"> Roll</label>
             <label style="display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" id="lvInvP"> Pitch</label>
           </div></div>
+        <div class="field"><label>Überkopf-Einbau</label><div class="hint">Sensor kopfüber montiert (Roll zeigt ±180°). Dreht die Messung, statt sie wegzukalibrieren.</div>
+          <div class="ip"><label style="display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" id="lvFlipZ"> Platine kopfüber</label></div></div>
         <div class="field"><label>Lagesensor aktiv</label><div class="hint">Modul abschalten, wenn kein Sensor verbaut ist.</div>
           <div class="ip"><label style="display:flex;align-items:center;gap:6px;font-weight:400"><input type="checkbox" id="lvEnabled"> aktiviert</label></div></div>
         <div class="actions">
@@ -421,27 +423,21 @@
           <div class="ip"><input type="number" name="socDPlusOn" min="50" max="100"><span class="unit">%</span></div></div>
         <div class="field"><label>D+ AUS unter SoC</label><div class="hint">Harte Abschaltschwelle (20–99 %).</div>
           <div class="ip"><input type="number" name="socDPlusOff" min="20" max="99"><span class="unit">%</span></div></div>
-        <div class="field"><label>D+ PV-AUS erst unter SoC</label><div class="hint">PV-Einbruch schaltet nur ab wenn SoC darunter (50–100 %).</div>
-          <div class="ip"><input type="number" name="socDPlusHigh" min="50" max="100"><span class="unit">%</span></div></div>
+        <div class="field"><label>D+ Mindest-PV</label><div class="hint">EIN nur bei genug Solar ODER MPPT im Float (10–2000 W).</div>
+          <div class="ip"><input type="number" name="pvDPlusMinW" min="10" max="2000"><span class="unit">W</span></div></div>
         <div class="field"><label>Gel-Lader EIN ab SoC</label><div class="hint">Starterbatterie laden ab (50–100 %).</div>
           <div class="ip"><input type="number" name="socGelOn" min="50" max="100"><span class="unit">%</span></div></div>
-        <div class="field"><label>Gel-Lader PV-AUS erst unter SoC</label><div class="hint">PV-Mindest-Check aktiv wenn SoC darunter (50–100 %).</div>
-          <div class="ip"><input type="number" name="socGelHigh" min="50" max="100"><span class="unit">%</span></div></div>
-        <div class="field"><label>Gel-Lader Mindest-PV</label><div class="hint">Nur laden bei genug Solar (0–500 W).</div>
+        <div class="field"><label>Gel-Lader AUS unter SoC</label><div class="hint">Harte Abschaltschwelle (20–99 %).</div>
+          <div class="ip"><input type="number" name="socGelOff" min="20" max="99"><span class="unit">%</span></div></div>
+        <div class="field"><label>Gel-Lader Mindest-PV</label><div class="hint">EIN nur bei genug Solar ODER MPPT im Float (0–500 W).</div>
           <div class="ip"><input type="number" name="pvGelMinW" min="0" max="500"><span class="unit">W</span></div></div>
-        <div class="field"><label>WR EIN ab SoC</label><div class="hint">Wechselrichter einschalten ab (50–100 %).</div>
-          <div class="ip"><input type="number" name="socWROn" min="50" max="100"><span class="unit">%</span></div></div>
-        <div class="field"><label>WR AUS unter SoC</label><div class="hint">Wechselrichter ausschalten unter (20–99 %).</div>
+        <div class="field"><label>WR AUS unter SoC</label><div class="hint">Schutzabschaltung (20–99 %). Einschalten nur manuell im System-Tab.</div>
           <div class="ip"><input type="number" name="socWROff" min="20" max="99"><span class="unit">%</span></div></div>
-        <div class="field"><label>D+ PV-Überschuss EIN</label><div class="hint">PV-Schwelle für D+-Relais Einschalten (10–2000 W).</div>
-          <div class="ip"><input type="number" name="pvThresholdOn" min="10" max="2000"><span class="unit">W</span></div></div>
-        <div class="field"><label>D+ PV-Überschuss AUS</label><div class="hint">PV-Schwelle für weiches Ausschalten (0–1990 W).</div>
-          <div class="ip"><input type="number" name="pvThresholdOff" min="0" max="1990"><span class="unit">W</span></div></div>
         <div class="field"><label>Flatter-Schutz</label><div class="hint">Stabile Zyklen vor Schaltung (1–60 × 2 s).</div>
           <div class="ip"><input type="number" name="relayDebounceCycles" min="1" max="60"><span class="unit">Zyklen</span></div></div>
         <div class="field"><label>SD-Schreibintervall</label><div class="hint">Batch-Intervall der Minutenwerte (1–60 min).</div>
           <div class="ip"><input type="number" id="logMin" min="1" max="60"><span class="unit">min</span></div></div>
-        <div class="field"><label>Manual-Deadman-Timeout</label><div class="hint">Automatischer Rückfall auf Auto nach dieser Zeit ohne neuen manuellen Befehl (1–240 min).</div>
+        <div class="field"><label>Manual-Deadman-Timeout</label><div class="hint">Gilt nur für manuelles EIN von D+ und Gel-Lader (1–240 min). Manuelles AUS ist dauerhaft; WR-EIN läuft ohne Timer.</div>
           <div class="ip"><input type="number" name="manualTimeoutMin" min="1" max="240"><span class="unit">min</span></div></div>
         <div class="actions">
           <button type="submit" class="btn primary" id="saveBtn">Speichern</button>
@@ -500,7 +496,7 @@
 </main>
 
 <div id="toast"></div>
-<div class="foot">GODMODULE · Energy Core v5.4.1 · WLAN: GODMODULE · http://192.168.4.1 · <span id="footTz">MEZ</span></div>
+<div class="foot">GODMODULE · Energy Core v5.5 · WLAN: GODMODULE · http://192.168.4.1 · <span id="footTz">MEZ</span></div>
 
 <script>
 "use strict";
@@ -758,7 +754,7 @@ window.addEventListener("resize",()=>{
 });
 
 /* ---- Einstellungen ---- */
-const PKEYS=["socDPlusOn","socDPlusOff","socDPlusHigh","pvThresholdOn","pvThresholdOff","socGelOn","socGelHigh","pvGelMinW","socWROn","socWROff","relayDebounceCycles","manualTimeoutMin"];
+const PKEYS=["socDPlusOn","socDPlusOff","pvDPlusMinW","socGelOn","socGelOff","pvGelMinW","socWROff","relayDebounceCycles","manualTimeoutMin"];
 async function loadParams(){
   try{const r=await fetch("/api/params",{cache:"no-store"});const p=await r.json();const f=$("paramForm");
     PKEYS.forEach(k=>{if(f[k])f[k].value=p[k];});
@@ -936,6 +932,7 @@ async function loadLevelCfg(){
     $("lvTrack").value=c.track;$("lvWbase").value=c.wheelbase;
     $("lvRot").value=String(c.rot);
     $("lvInvR").checked=!!c.invRoll;$("lvInvP").checked=!!c.invPitch;
+    $("lvFlipZ").checked=!!c.flipZ;
     $("lvEnabled").checked=!!c.enabled;
   }catch(_){toast("Lage-Konfig nicht ladbar","bad");}
 }
@@ -945,6 +942,7 @@ $("lvSaveBtn").onclick=async()=>{
     track:+$("lvTrack").value, wheelbase:+$("lvWbase").value,
     rot:+$("lvRot").value,
     invRoll:$("lvInvR").checked, invPitch:$("lvInvP").checked,
+    flipZ:$("lvFlipZ").checked,
     enabled:$("lvEnabled").checked
   };
   if(!(body.track>=800&&body.track<=3000)){toast("Spurweite 800–3000 mm","bad");return;}

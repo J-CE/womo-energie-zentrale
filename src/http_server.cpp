@@ -1,5 +1,5 @@
 // ============================================================
-//  http_server.cpp — Womo Energy Core v5.4.1
+//  http_server.cpp — Womo Energy Core v5.5
 //
 //  v5.4.1: Web-OTA (/api/ota GET+POST) — Logik im Modul ota.cpp.
 //  v5.0: 12 Parameter (socDPlusHigh/socGelHigh neu,
@@ -196,15 +196,14 @@ static void handle_params_post(AsyncWebServerRequest* req, uint8_t* data,
     }
     free(body);
     bool ok = true;
+    // v5.5: Parameterbereinigung — socDPlusHigh/pvThresholdOff/socGelHigh/
+    // socWROn entfallen, pvThresholdOn→pvDPlusMinW, socGelOff neu.
     if (doc.containsKey("socDPlusOn"))          ok &= params_set_soc_dplus_on         (doc["socDPlusOn"]);
     if (doc.containsKey("socDPlusOff"))         ok &= params_set_soc_dplus_off        (doc["socDPlusOff"]);
-    if (doc.containsKey("socDPlusHigh"))        ok &= params_set_soc_dplus_high       (doc["socDPlusHigh"]);
-    if (doc.containsKey("pvThresholdOn"))       ok &= params_set_pv_threshold_on      (doc["pvThresholdOn"]);
-    if (doc.containsKey("pvThresholdOff"))      ok &= params_set_pv_threshold_off     (doc["pvThresholdOff"]);
+    if (doc.containsKey("pvDPlusMinW"))         ok &= params_set_pv_dplus_min_w       (doc["pvDPlusMinW"]);
     if (doc.containsKey("socGelOn"))            ok &= params_set_soc_gel_on           (doc["socGelOn"]);
-    if (doc.containsKey("socGelHigh"))          ok &= params_set_soc_gel_high         (doc["socGelHigh"]);
+    if (doc.containsKey("socGelOff"))           ok &= params_set_soc_gel_off          (doc["socGelOff"]);
     if (doc.containsKey("pvGelMinW"))           ok &= params_set_pv_gel_min_w         (doc["pvGelMinW"]);
-    if (doc.containsKey("socWROn"))             ok &= params_set_soc_wr_on            (doc["socWROn"]);
     if (doc.containsKey("socWROff"))            ok &= params_set_soc_wr_off           (doc["socWROff"]);
     if (doc.containsKey("relayDebounceCycles")) ok &= params_set_relay_debounce_cycles(doc["relayDebounceCycles"]);
     if (doc.containsKey("logIntervalMs"))       ok &= params_set_log_interval_ms      (doc["logIntervalMs"]);
@@ -218,10 +217,12 @@ static void handle_reset(AsyncWebServerRequest* req) {
     req->send(200, "application/json", "{\"ok\":true}");
 }
 
-// ── Manueller Aktor-Override (Webinterface, v5.4) ─────────────
+// ── Manueller Aktor-Override (Webinterface, v5.4/v5.5) ────────
 // {"actuator":"dplus|gel|wr","mode":"auto|on|off"}
-// "auto" schaltet sofort zurück in die Automatik. "on"/"off" setzt
-// Manual-Modus + Deadman-Timer (siehe logic_set_manual/logic.cpp).
+// "auto" schaltet sofort zurück in die Automatik (löscht auch ein
+// persistentes AUS). "on": Manuell-EIN — D+/Gel mit Deadman-Timer,
+// WR ohne Timer. "off": Manuell-AUS, dauerhaft + NVS-persistent.
+// Details: logic_set_manual/logic.cpp (v5.5-Semantik).
 static void handle_manual_post(AsyncWebServerRequest* req, uint8_t* data,
                                size_t len, size_t index, size_t total) {
     char* body = collect_body_chunk(req, data, len, index, total);
@@ -382,6 +383,7 @@ static void handle_levelcfg_post(AsyncWebServerRequest* req, uint8_t* data,
         bool invP = doc["invPitch"] | false;
         ok &= level_set_invert(invR, invP);
     }
+    if (doc.containsKey("flipZ"))     ok &= level_set_flipz    (doc["flipZ"]);   // v5.5 Überkopf-Einbau
     if (doc.containsKey("enabled"))   ok &= level_set_enabled  (doc["enabled"]);
     free(body);
     req->send(ok?200:400, "application/json",

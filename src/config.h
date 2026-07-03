@@ -1,5 +1,5 @@
 // ============================================================
-//  config.h — Womo Energy Core v5.4.1
+//  config.h — Womo Energy Core v5.5
 //  Zielplattform: ESP32-S3 DevKitC-1 N16R8
 //
 //  GPIO-Reservierungen ESP32-S3 N16R8:
@@ -16,10 +16,10 @@
 
 #pragma once
 
-// ── Firmware-Version (v5.4.1) ────────────────────────────────
+// ── Firmware-Version (v5.5) ──────────────────────────────────
 // Zentrale Quelle für Boot-Banner (main.cpp) und /api/ota.
 // Bei jedem Release NUR hier ändern (+ Datei-Kopfzeilen).
-#define FW_VERSION "5.4.1"
+#define FW_VERSION "5.5"
 
 // ============================================================
 //  BLOCK 1 — HARDWARE-KONSTANTEN
@@ -100,8 +100,13 @@
 #define GPIO_LANDSTROM_SENSOR       18          // INPUT, Spannungsteiler 2k/1,5k von 5V, HIGH = Landstrom
 
 // ── Digitale Ausgänge ────────────────────────────────────────
-#define GPIO_RELAY_D_PLUS           21          // Active-LOW
-#define RELAY_D_PLUS_ACTIVE         LOW
+// v5.5-FIX: D+ läuft seit dem Hardware-Umbau über ein Joy-it COM-MOSFET
+// (IRF9540N, P-Kanal High-Side, Active-HIGH) — die in der Anschluss_
+// Anleitung dokumentierte Umstellung RELAY_D_PLUS_ACTIVE LOW→HIGH war
+// hier nie nachgezogen worden. Folge: EIN/AUS invertiert UND D+ ab
+// Boot aktiv (io_init() setzte HIGH als "sicher" nach alter Logik).
+#define GPIO_RELAY_D_PLUS           21          // Active-HIGH (Joy-it COM-MOSFET)
+#define RELAY_D_PLUS_ACTIVE         HIGH
 
 #define GPIO_MOSFET_GEL             39          // Active-HIGH (JTAG-MTCK, USB-JTAG aktiv)
 #define MOSFET_GEL_ACTIVE           HIGH
@@ -195,52 +200,52 @@
 // ============================================================
 
 // ── D+-Relais Kühlschrank ─────────────────────────────────────
-// EIN:      SoC >= ON  UND  PV(MA) >= pvThresholdOn  UND  kein Landstrom
-// AUS hart: SoC < OFF
-// AUS weich:(PV(MA) < pvThresholdOff  UND  SoC < socDPlusHigh)
-//           → bei SoC >= socDPlusHigh bleibt Kühlschrank trotz PV-Einbruch EIN
+// v5.5 (Kriterien-Redesign): kein PV-basiertes AUS mehr, kein
+// socHigh, MPPT-Ausfall ist KEINE AUS-Bedingung (nur die EIN-Seite
+// braucht gültige MPPT-Daten). Float-Modus des MPPT zählt als
+// "genug PV" — im Float ist der Akku voll, Überschuss vorhanden.
+// EIN:      SoC >= ON  UND  (PV(MA) >= pvDPlusMinW  ODER  CS=Float)
+//           UND BMS gültig UND MPPT gültig UND kein Landstrom
+// AUS hart: Landstrom | BMS ungültig/veraltet | SoC < OFF
 #define DEFAULT_SOC_D_PLUS_ON           95      // % EIN-Schwelle
 #define DEFAULT_SOC_D_PLUS_OFF          80      // % harte AUS-Schwelle
-#define DEFAULT_SOC_D_PLUS_HIGH         90      // % weiche PV-AUS nur unterhalb
-#define DEFAULT_PV_THRESHOLD_ON        150      // W EIN-Schwelle
-#define DEFAULT_PV_THRESHOLD_OFF       100      // W AUS-Schwelle (nur wenn SoC < HIGH)
+#define DEFAULT_PV_D_PLUS_MIN_W        100      // W Mindest-PV (ODER Float)
 
 // ── Gel-Lader Starterbatterie ────────────────────────────────
-// EIN:      SoC >= socGelOn  UND  PV(MA) >= pvGelMinW
-// AUS hart: SoC < socGelOn  (kein separater socGelOff — Schwelle = EIN-Schwelle)
-// AUS weich:(PV(MA) < pvGelMinW  UND  SoC < socGelHigh)
-//           → bei SoC >= socGelHigh läuft Gel-Lader auch ohne PV weiter
-#define DEFAULT_SOC_GEL_ON              82      // % EIN-Schwelle + harte AUS-Schwelle
-#define DEFAULT_SOC_GEL_HIGH            90      // % weiche PV-AUS nur unterhalb
-#define DEFAULT_PV_GEL_MIN_W            60      // W Mindest-PV (v5.0: 30→60W)
+// v5.5: identische Struktur wie D+ (inkl. Landstrom-AUS, neu) —
+// eigener socGelOff (bisher war socGelOn zugleich harte AUS-Schwelle).
+// EIN:      SoC >= socGelOn  UND  (PV(MA) >= pvGelMinW  ODER  CS=Float)
+//           UND BMS gültig UND MPPT gültig UND kein Landstrom
+// AUS hart: Landstrom | BMS ungültig/veraltet | SoC < socGelOff
+#define DEFAULT_SOC_GEL_ON              95      // % EIN-Schwelle
+#define DEFAULT_SOC_GEL_OFF             80      // % harte AUS-Schwelle (neu v5.5)
+#define DEFAULT_PV_GEL_MIN_W            20      // W Mindest-PV (v5.5: 60→20W)
 
-// ── Wechselrichter Remote (SoC-basiert, kein PV-Check) ───────
-// v5.3: Landstrom-Abhängigkeit entfernt — der Renogy-Wechselrichter
-// hat eine eingebaute NVS (Netzvorrangschaltung) und übernimmt die
-// AC-seitige Umschaltung Landstrom/Inverter selbst. Ein hartes
-// Abschalten der Fernsteuerung bei Landstrom ist bei diesem Gerät
-// nicht nötig (anders als bei der ursprünglich vorgesehenen Edecoa-
-// Lösung ohne NVS).
-// EIN:      SoC >= socWROn  UND  BMS gültig
+// ── Wechselrichter Remote (v5.5: KEIN Auto-EIN mehr) ─────────
+// Einschalten ausschließlich manuell (Dashboard, ohne Deadman-Timer).
+// Die Automatik darf den WR nur noch ABschalten — auch während
+// Manuell-EIN (Sicherheitsnetz, da der Timer entfällt):
 // AUS hart: BMS ungültig/veraltet
 // AUS weich:SoC < socWROff
-#define DEFAULT_SOC_WR_ON               95      // %
+// (v5.3: Landstrom-Abhängigkeit entfernt — Renogy-NVS übernimmt die
+// AC-seitige Umschaltung Landstrom/Inverter selbst.)
 #define DEFAULT_SOC_WR_OFF              80      // %
 
 // ── Flatter-Schutz ───────────────────────────────────────────
 #define DEFAULT_RELAY_DEBOUNCE_CYCLES   10      // Zyklen × 2s = 20s Stabilität
 
-// ── Manueller Aktor-Override (Webinterface, v5.4) ─────
-#define DEFAULT_MANUAL_TIMEOUT_MIN      30      // min bis Deadman-Rückfall auf Auto (Refresh bei jedem Befehl)
+// ── Manueller Aktor-Override (Webinterface, v5.4/v5.5) ───────
+// v5.5: Deadman-Timeout gilt NUR noch für Manuell-EIN von D+ und
+// Gel-Lader. Manuell-AUS ist dauerhaft (NVS-persistent, überlebt
+// Reboot, kein Rückfall auf Auto). WR-Manuell-EIN läuft ohne Timer
+// (Sicherheitsnetz sind die Auto-AUS-Bedingungen, s. oben).
+#define DEFAULT_MANUAL_TIMEOUT_MIN      30      // min Deadman (nur EIN, nur D+/Gel)
 
 // ── PV-Glättung ──────────────────────────────────────────────
 #define LOGIC_PPV_MA_WINDOW             15      // Samples × 2s = 30s MA-Fenster
 
 // ── MPPT Recovery-Debounce ───────────────────────────────────
 #define LOGIC_MPPT_RECOVERY_MIN          5      // valide Frames nach Timeout (≈ 10s)
-
-// ── D+-Mindestlaufzeit (Kompressor-Schutz) ───────────────────
-#define LOGIC_DPLUS_MIN_ON_MS       300000      // 300s = 5min
 
 // ── Logging ──────────────────────────────────────────────────
 #define DEFAULT_LOG_INTERVAL_MS     900000      // 15 Minuten SD-Batch

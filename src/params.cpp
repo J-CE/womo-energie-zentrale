@@ -1,5 +1,11 @@
 // ============================================================
-//  params.cpp — Womo Energy Core v5.4
+//  params.cpp — Womo Energy Core v5.5
+//  v5.5: Parameterbereinigung (13→10, s. params.h). Entfallene
+//  NVS-Schlüssel werden beim ersten Boot aufgeräumt; neue Schlüssel
+//  (pvDPlusMinW, socGelOff) mit Defaults angelegt. Bestehende Werte
+//  von socGelOn/pvGelMinW bleiben erhalten — nach dem Update im
+//  Dashboard prüfen (neue Empfehlung: Gel EIN 95 % / Mindest-PV 20 W)
+//  oder Werks-Reset ausführen.
 // ============================================================
 #include "params.h"
 #include <Preferences.h>
@@ -11,13 +17,10 @@ static Preferences prefs;
 static void _write_defaults() {
     prefs.putUChar ("socDPlusOn",    DEFAULT_SOC_D_PLUS_ON);
     prefs.putUChar ("socDPlusOff",   DEFAULT_SOC_D_PLUS_OFF);
-    prefs.putUChar ("socDPlusHigh",  DEFAULT_SOC_D_PLUS_HIGH);
-    prefs.putUShort("pvThreshOn",    DEFAULT_PV_THRESHOLD_ON);
-    prefs.putUShort("pvThreshOff",   DEFAULT_PV_THRESHOLD_OFF);
+    prefs.putUShort("pvDPlusMinW",   DEFAULT_PV_D_PLUS_MIN_W);
     prefs.putUChar ("socGelOn",      DEFAULT_SOC_GEL_ON);
-    prefs.putUChar ("socGelHigh",    DEFAULT_SOC_GEL_HIGH);
+    prefs.putUChar ("socGelOff",     DEFAULT_SOC_GEL_OFF);
     prefs.putUShort("pvGelMinW",     DEFAULT_PV_GEL_MIN_W);
-    prefs.putUChar ("socWROn",       DEFAULT_SOC_WR_ON);
     prefs.putUChar ("socWROff",      DEFAULT_SOC_WR_OFF);
     prefs.putUChar ("debounceCyc",   DEFAULT_RELAY_DEBOUNCE_CYCLES);
     prefs.putULong ("logIntervalMs", DEFAULT_LOG_INTERVAL_MS);
@@ -32,13 +35,10 @@ static inline uint32_t _clu32(uint32_t v, uint32_t lo, uint32_t hi){ return v<lo
 static void _clamp_loaded() {
     g_params.socDPlusOn          = _clu8 (g_params.socDPlusOn,          50, 100);
     g_params.socDPlusOff         = _clu8 (g_params.socDPlusOff,         20,  99);
-    g_params.socDPlusHigh        = _clu8 (g_params.socDPlusHigh,        50, 100);
-    g_params.pvThresholdOn       = _clu16(g_params.pvThresholdOn,       10, 2000);
-    g_params.pvThresholdOff      = _clu16(g_params.pvThresholdOff,       0, 2000);
+    g_params.pvDPlusMinW         = _clu16(g_params.pvDPlusMinW,         10, 2000);
     g_params.socGelOn            = _clu8 (g_params.socGelOn,            50, 100);
-    g_params.socGelHigh          = _clu8 (g_params.socGelHigh,          50, 100);
+    g_params.socGelOff           = _clu8 (g_params.socGelOff,           20,  99);
     g_params.pvGelMinW           = _clu16(g_params.pvGelMinW,            0,  500);
-    g_params.socWROn             = _clu8 (g_params.socWROn,             50, 100);
     g_params.socWROff            = _clu8 (g_params.socWROff,            20,  99);
     g_params.relayDebounceCycles = _clu8 (g_params.relayDebounceCycles,  1,   60);
     g_params.logIntervalMs       = _clu32(g_params.logIntervalMs,   60000, 3600000);
@@ -48,13 +48,10 @@ static void _clamp_loaded() {
 static void _load_from_nvs() {
     g_params.socDPlusOn          = prefs.getUChar ("socDPlusOn",    DEFAULT_SOC_D_PLUS_ON);
     g_params.socDPlusOff         = prefs.getUChar ("socDPlusOff",   DEFAULT_SOC_D_PLUS_OFF);
-    g_params.socDPlusHigh        = prefs.getUChar ("socDPlusHigh",  DEFAULT_SOC_D_PLUS_HIGH);
-    g_params.pvThresholdOn       = prefs.getUShort("pvThreshOn",    DEFAULT_PV_THRESHOLD_ON);
-    g_params.pvThresholdOff      = prefs.getUShort("pvThreshOff",   DEFAULT_PV_THRESHOLD_OFF);
+    g_params.pvDPlusMinW         = prefs.getUShort("pvDPlusMinW",   DEFAULT_PV_D_PLUS_MIN_W);
     g_params.socGelOn            = prefs.getUChar ("socGelOn",      DEFAULT_SOC_GEL_ON);
-    g_params.socGelHigh          = prefs.getUChar ("socGelHigh",    DEFAULT_SOC_GEL_HIGH);
+    g_params.socGelOff           = prefs.getUChar ("socGelOff",     DEFAULT_SOC_GEL_OFF);
     g_params.pvGelMinW           = prefs.getUShort("pvGelMinW",     DEFAULT_PV_GEL_MIN_W);
-    g_params.socWROn             = prefs.getUChar ("socWROn",       DEFAULT_SOC_WR_ON);
     g_params.socWROff            = prefs.getUChar ("socWROff",      DEFAULT_SOC_WR_OFF);
     g_params.relayDebounceCycles = prefs.getUChar ("debounceCyc",   DEFAULT_RELAY_DEBOUNCE_CYCLES);
     g_params.logIntervalMs       = prefs.getULong ("logIntervalMs", DEFAULT_LOG_INTERVAL_MS);
@@ -75,19 +72,22 @@ void params_init() {
         Serial.println("[PARAMS] Erster Start — schreibe Defaults");
         _write_defaults();
     }
-    // v5.0: neue Schlüssel anlegen falls NVS aus v4.x kommt
-    if (!prefs.isKey("socDPlusHigh")) prefs.putUChar("socDPlusHigh", DEFAULT_SOC_D_PLUS_HIGH);
-    if (!prefs.isKey("socGelHigh"))   prefs.putUChar("socGelHigh",   DEFAULT_SOC_GEL_HIGH);
-    // v5.4: manueller Aktor-Override — Timeout-Parameter falls NVS aus älterer Version kommt
-    if (!prefs.isKey("manualTOMin"))  prefs.putUChar("manualTOMin",  DEFAULT_MANUAL_TIMEOUT_MIN);
+    // v5.5-Migration: neue Schlüssel anlegen, entfallene aufräumen.
+    if (!prefs.isKey("pvDPlusMinW")) prefs.putUShort("pvDPlusMinW", DEFAULT_PV_D_PLUS_MIN_W);
+    if (!prefs.isKey("socGelOff"))   prefs.putUChar ("socGelOff",   DEFAULT_SOC_GEL_OFF);
+    if (!prefs.isKey("manualTOMin")) prefs.putUChar ("manualTOMin", DEFAULT_MANUAL_TIMEOUT_MIN);
+    if (prefs.isKey("socDPlusHigh")) prefs.remove("socDPlusHigh");
+    if (prefs.isKey("pvThreshOn"))   prefs.remove("pvThreshOn");
+    if (prefs.isKey("pvThreshOff"))  prefs.remove("pvThreshOff");
+    if (prefs.isKey("socGelHigh"))   prefs.remove("socGelHigh");
+    if (prefs.isKey("socWROn"))      prefs.remove("socWROn");
 
     _load_from_nvs();
-    Serial.printf("[PARAMS] D+: SOC %u/%u/High%u PV %u/%u\n",
-        g_params.socDPlusOn, g_params.socDPlusOff, g_params.socDPlusHigh,
-        g_params.pvThresholdOn, g_params.pvThresholdOff);
-    Serial.printf("[PARAMS] Gel: SOC %u/High%u PV>=%u | WR: SOC %u/%u\n",
-        g_params.socGelOn, g_params.socGelHigh, g_params.pvGelMinW,
-        g_params.socWROn, g_params.socWROff);
+    Serial.printf("[PARAMS] D+: SOC %u/%u PV>=%uW|Float\n",
+        g_params.socDPlusOn, g_params.socDPlusOff, g_params.pvDPlusMinW);
+    Serial.printf("[PARAMS] Gel: SOC %u/%u PV>=%uW|Float | WR: AUS<%u%% (EIN nur manuell)\n",
+        g_params.socGelOn, g_params.socGelOff, g_params.pvGelMinW,
+        g_params.socWROff);
 }
 
 void params_reset() {
@@ -105,33 +105,21 @@ bool params_set_soc_dplus_off(uint8_t v) {
     if (v < 20 || v > 99) return false;
     g_params.socDPlusOff = v; prefs.putUChar("socDPlusOff", v); return true;
 }
-bool params_set_soc_dplus_high(uint8_t v) {
-    if (v < 50 || v > 100) return false;
-    g_params.socDPlusHigh = v; prefs.putUChar("socDPlusHigh", v); return true;
-}
-bool params_set_pv_threshold_on(uint16_t v) {
+bool params_set_pv_dplus_min_w(uint16_t v) {
     if (v < 10 || v > 2000) return false;
-    g_params.pvThresholdOn = v; prefs.putUShort("pvThreshOn", v); return true;
-}
-bool params_set_pv_threshold_off(uint16_t v) {
-    if (v > 2000) return false;
-    g_params.pvThresholdOff = v; prefs.putUShort("pvThreshOff", v); return true;
+    g_params.pvDPlusMinW = v; prefs.putUShort("pvDPlusMinW", v); return true;
 }
 bool params_set_soc_gel_on(uint8_t v) {
     if (v < 50 || v > 100) return false;
     g_params.socGelOn = v; prefs.putUChar("socGelOn", v); return true;
 }
-bool params_set_soc_gel_high(uint8_t v) {
-    if (v < 50 || v > 100) return false;
-    g_params.socGelHigh = v; prefs.putUChar("socGelHigh", v); return true;
+bool params_set_soc_gel_off(uint8_t v) {
+    if (v < 20 || v > 99) return false;
+    g_params.socGelOff = v; prefs.putUChar("socGelOff", v); return true;
 }
 bool params_set_pv_gel_min_w(uint16_t v) {
     if (v > 500) return false;
     g_params.pvGelMinW = v; prefs.putUShort("pvGelMinW", v); return true;
-}
-bool params_set_soc_wr_on(uint8_t v) {
-    if (v < 50 || v > 100) return false;
-    g_params.socWROn = v; prefs.putUChar("socWROn", v); return true;
 }
 bool params_set_soc_wr_off(uint8_t v) {
     if (v < 20 || v > 99) return false;
@@ -151,18 +139,16 @@ bool params_set_manual_timeout_min(uint8_t v) {
 }
 
 String params_to_json() {
-    char buf[512];
+    char buf[400];
     snprintf(buf, sizeof(buf),
-        "{\"socDPlusOn\":%u,\"socDPlusOff\":%u,\"socDPlusHigh\":%u,"
-        "\"pvThresholdOn\":%u,\"pvThresholdOff\":%u,"
-        "\"socGelOn\":%u,\"socGelHigh\":%u,\"pvGelMinW\":%u,"
-        "\"socWROn\":%u,\"socWROff\":%u,"
+        "{\"socDPlusOn\":%u,\"socDPlusOff\":%u,\"pvDPlusMinW\":%u,"
+        "\"socGelOn\":%u,\"socGelOff\":%u,\"pvGelMinW\":%u,"
+        "\"socWROff\":%u,"
         "\"relayDebounceCycles\":%u,\"logIntervalMs\":%lu,"
         "\"manualTimeoutMin\":%u}",
-        g_params.socDPlusOn, g_params.socDPlusOff, g_params.socDPlusHigh,
-        g_params.pvThresholdOn, g_params.pvThresholdOff,
-        g_params.socGelOn, g_params.socGelHigh, g_params.pvGelMinW,
-        g_params.socWROn, g_params.socWROff,
+        g_params.socDPlusOn, g_params.socDPlusOff, g_params.pvDPlusMinW,
+        g_params.socGelOn, g_params.socGelOff, g_params.pvGelMinW,
+        g_params.socWROff,
         g_params.relayDebounceCycles,
         (unsigned long)g_params.logIntervalMs,
         g_params.manualTimeoutMin);

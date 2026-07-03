@@ -1,5 +1,5 @@
 // ============================================================
-//  level.h — Womo Energy Core v5.4 (optionales Modul)
+//  level.h — Womo Energy Core v5.5 (optionales Modul)
 //  Elektronische Wasserwaage / Lagesensor
 //
 //  Sensor:  MMA8452Q (3-Achs-Beschleunigungssensor) am GEMEINSAMEN
@@ -54,6 +54,12 @@ bool   level_set_track    (uint16_t mm);    // Spurweite 800..3000
 bool   level_set_wheelbase(uint16_t mm);    // Radstand  1500..8000
 bool   level_set_rot      (uint16_t deg);   // Einbaudrehung 0/90/180/270
 bool   level_set_invert   (bool invRoll, bool invPitch);
+// v5.5: Überkopf-Einbau (Sensor kopfüber, az≈−1g). Negiert ay/az vor
+// der Neigungsberechnung (Spiegelung um die Längsachse) — die einzige
+// Orientierung, die rot/inv NICHT abbilden können. NICHT per Null-
+// Kalibrierung lösbar: atan2 springt bei ±180° um 360° → tan(roll)
+// explodiert, Keilwerte werden unbrauchbar.
+bool   level_set_flipz    (bool flip);
 bool   level_set_enabled  (bool en);
 
 // Kalibrierung: reset=false → aktuelle Lage als "eben" speichern;

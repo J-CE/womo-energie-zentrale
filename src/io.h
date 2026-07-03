@@ -1,9 +1,9 @@
 // ============================================================
-//  io.h — Womo Energy Core v5.4
+//  io.h — Womo Energy Core v5.5
 //  GPIO-Abstraktion: Relais, MOSFETs, LEDs, Landstrom-Sensor
 //
-//  Ausgänge (alle Fail-Safe LOW bei Reset):
-//    GPIO_RELAY_D_PLUS   21  Active-LOW   D+-Relais Kühlschrank
+//  Ausgänge (alle Fail-Safe = inaktiv bei Reset, s. io_init):
+//    GPIO_RELAY_D_PLUS   21  Active-HIGH  D+ COM-MOSFET Kühlschrank (v5.5-Fix)
 //    GPIO_MOSFET_GEL     39  Active-HIGH  Gel-Lader MOSFET
 //    GPIO_OPTO_WR_REMOTE 40  Active-HIGH  WR-Remote Optokoppler (Renogy NVS Schalterkontakt-Brücke)
 //    GPIO_STATUS_LED     41  Active-HIGH  Status-LED

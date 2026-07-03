@@ -1,6 +1,15 @@
 // ============================================================
-//  level.cpp — Womo Energy Core v5.4 (optionales Modul)
+//  level.cpp — Womo Energy Core v5.5 (optionales Modul)
 //  Elektronische Wasserwaage / Lagesensor (MMA8452Q)
+//
+//  v5.5 Änderungen:
+//   • flipZ ("Überkopf-Einbau"): Sensor kopfüber montiert → ay/az
+//     werden vor der Neigungsberechnung negiert. Behebt Roll ≈ ±180°.
+//   • Fehlertoleranz: valid kippt erst nach 4 aufeinanderfolgenden
+//     Fehlversuchen (≈1s) auf false — ein einzelner verpasster
+//     g_i2cMutex-Take (Kollision mit DS3231-Zugriff des Clock-Tasks)
+//     ließ die Libelle bisher bei jedem 4Hz-Poll kurz grau/mittig
+//     springen. Mutex-Timeout zusätzlich 40→100ms.
 // ============================================================
 #include "level.h"
 #include "config.h"
@@ -29,6 +38,7 @@ static uint8_t      s_addr = 0;       // erkannte I2C-Adresse (0 = keiner)
 // ── Konfiguration (RAM-Spiegel des NVS) ───────────────────────
 static uint16_t c_track, c_wbase, c_rot;
 static bool     c_invR, c_invP, c_enabled;
+static bool     c_flipZ;                 // v5.5: Überkopf-Einbau
 static float    c_zRoll, c_zPitch;
 
 // ── Glättung (EMA über die g-Werte gegen Vibration/Erschütterung) ──
@@ -88,6 +98,7 @@ static void cfg_load() {
     c_rot     = lprefs.getUShort("rot",   0);
     c_invR    = lprefs.getBool  ("invR",  false);
     c_invP    = lprefs.getBool  ("invP",  false);
+    c_flipZ   = lprefs.getBool  ("flipZ", false);
     c_enabled = lprefs.getBool  ("en",    true);
     c_zRoll   = lprefs.getFloat ("zRoll", 0.0f);
     c_zPitch  = lprefs.getFloat ("zPitch", 0.0f);
@@ -127,6 +138,11 @@ void level_init() {
 
 // ── Neigung + Keilgeometrie berechnen und im Cache ablegen ────
 static void recompute_and_store(float ax, float ay, float az) {
+    // v5.5: Überkopf-Einbau — Spiegelung um die Längsachse (ay,az → −ay,−az).
+    // Roll-/Pitch-Vorzeichen bleiben dabei korrekt; andere Überkopf-
+    // Orientierungen ergeben sich in Kombination mit c_rot/c_inv*.
+    if (c_flipZ) { ay = -ay; az = -az; }
+
     // EMA-Glättung
     if (!f_init) { f_ax = ax; f_ay = ay; f_az = az; f_init = true; }
     else {
@@ -191,19 +207,25 @@ static void recompute_and_store(float ax, float ay, float az) {
 
 void level_task(void*) {
     uint32_t   lastDetect = 0;
+    uint8_t    failCnt    = 0;          // v5.5: Fehlertoleranz-Zähler
     TickType_t last = xTaskGetTickCount();
     for (;;) {
         bool en = c_enabled;
         if (en && s_addr) {
             float ax, ay, az;
             bool got = false;
-            if (g_i2cMutex && xSemaphoreTake(g_i2cMutex, pdMS_TO_TICKS(40)) == pdTRUE) {
+            if (g_i2cMutex && xSemaphoreTake(g_i2cMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
                 got = mma_read_accel(ax, ay, az);
                 xSemaphoreGive(g_i2cMutex);
             }
-            if (got) recompute_and_store(ax, ay, az);
+            if (got) { failCnt = 0; recompute_and_store(ax, ay, az); }
             else {
-                taskENTER_CRITICAL(&s_mux); s_state.valid = false; taskEXIT_CRITICAL(&s_mux);
+                // v5.5: erst nach 4 Fehlversuchen in Folge (≈1s) invalid —
+                // bis dahin bleiben die letzten gültigen Werte stehen.
+                if (failCnt < 255) failCnt++;
+                if (failCnt >= 4) {
+                    taskENTER_CRITICAL(&s_mux); s_state.valid = false; taskEXIT_CRITICAL(&s_mux);
+                }
             }
         } else if (en && !s_addr) {
             // Bring-up/Hotplug: alle 3s erneut nach dem Sensor suchen
@@ -248,11 +270,12 @@ String level_cfg_to_json() {
     char buf[256];
     snprintf(buf, sizeof(buf),
         "{\"track\":%u,\"wheelbase\":%u,\"rot\":%u,"
-        "\"invRoll\":%s,\"invPitch\":%s,\"enabled\":%s,"
+        "\"invRoll\":%s,\"invPitch\":%s,\"flipZ\":%s,\"enabled\":%s,"
         "\"zeroRoll\":%.2f,\"zeroPitch\":%.2f}",
         c_track, c_wbase, c_rot,
         c_invR ? "true" : "false",
         c_invP ? "true" : "false",
+        c_flipZ ? "true" : "false",
         c_enabled ? "true" : "false",
         c_zRoll, c_zPitch);
     return String(buf);
@@ -274,6 +297,11 @@ bool level_set_rot(uint16_t deg) {
 bool level_set_invert(bool invRoll, bool invPitch) {
     c_invR = invRoll; c_invP = invPitch;
     lprefs.putBool("invR", invRoll); lprefs.putBool("invP", invPitch);
+    return true;
+}
+bool level_set_flipz(bool flip) {
+    c_flipZ = flip; lprefs.putBool("flipZ", flip);
+    f_init = false;   // EMA neu starten — alte Werte haben falsches Vorzeichen
     return true;
 }
 bool level_set_enabled(bool en) {

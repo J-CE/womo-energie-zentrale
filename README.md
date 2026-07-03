@@ -1,4 +1,4 @@
-# Womo Energy Core v5.4.1
+# Womo Energy Core v5.5
 
 Eigenentwickeltes Energiemanagement-System für ein Wohnmobil, basierend auf einem ESP32-S3. Überwacht BMS und MPPT-Laderegler, steuert Verbraucher/Lader automatisch nach Ladezustand und Solarleistung, loggt historische Daten und liefert ein komplett offline-fähiges Web-Dashboard.
 
@@ -34,6 +34,7 @@ Die vollständige GPIO-Belegung steht in `src/config.h` (P-SW03 im Lastenheft).
 - **RGB-Status-LED** zeigt BMS-/MPPT-Fehler, SoC, Landstrom und alle Aktoren gleichzeitig in einem Rundlauf-Muster an
 - **JK-BMS-Anbindung wahlweise über UART-TTL (GPS-Port) oder CAN** (Compile-Zeit-Umschaltung, identischer Datenoutput)
 - **Elektronische Wasserwaage** (optional, MMA8452Q): Neigungsmessung (Roll/Pitch), automatische Keilhöhen-Berechnung pro Rad, eigener Dashboard-Tab mit Libellen-Anzeige und Kalibrierung
+- **Schaltkriterien v5.5**: D+/Gel schalten nur noch über harte Bedingungen ab (Landstrom, BMS ungültig, SoC-Schwelle) — MPPT-Ausfälle und PV-Einbrüche schalten nichts mehr ab; EIN bei genug PV **oder** MPPT-Float. Wechselrichter: Einschalten nur manuell, Automatik nur als Schutz-Abschaltung. Manuelles AUS ist dauerhaft und reboot-fest (NVS)
 - **Web-OTA** (v5.4.1): Firmware- und Dashboard-Updates direkt aus dem Browser (System-Tab), ohne PC/USB — Dual-App-Partitionslayout, Upload mit Fortschrittsanzeige, automatischer Neustart mit Ringpuffer-Sicherung
 
 Die vollständige, nummerierte Anforderungsliste steht in [`Software_Lasten_Pflichtenheft.txt`](./Software_Lasten_Pflichtenheft.txt).
@@ -124,7 +125,7 @@ Nach erfolgreichem Upload sichert das Gerät den Ringpuffer auf SD und startet a
 
 ## Status / Roadmap
 
-**Läuft bereits:** WLAN-AP, Webserver/Dashboard, LittleFS, SD-Karten-Logging, DS3231-RTC, RGB-Status-LED, Lagesensor (MMA8452Q verbaut, Firmware inkl. REST-API vollständig), Web-OTA (Firmware + Dashboard, v5.4.1).
+**Läuft bereits:** WLAN-AP, Webserver/Dashboard, LittleFS, SD-Karten-Logging, DS3231-RTC, RGB-Status-LED, Lagesensor (MMA8452Q verbaut, Firmware inkl. REST-API vollständig, ab v5.5 inkl. Überkopf-Einbau), Web-OTA (Firmware + Dashboard, v5.4.1).
 
 **Aktueller Hardware-Meilenstein:** JK-BMS-Anbindung umgestellt von RS485 (3-Pin JST-GH-Stecker nicht beschaffbar) auf direkte UART-TTL-Verdrahtung am GPS-Port (4-Pin, vorhandener Steckertyp) — kein MAX485 mehr nötig. Pinpegel am Gerät verifiziert (Pin 2/3 ~2,5V, kein VBAT). Offen: erste Kommunikationsverifikation; FW V11.287H liegt im Bereich, in dem manche Geräte über den GPS-Port keine Antwort mehr liefern — Fallback wäre die CAN-Variante (bmscan.cpp) oder eine MAX485-Doppelbrücke.
 

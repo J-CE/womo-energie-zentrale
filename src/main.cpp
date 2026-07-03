@@ -1,5 +1,5 @@
 // ============================================================
-//  main.cpp — Womo Energy Core v5.4.1
+//  main.cpp — Womo Energy Core v5.5
 //
 //  Watchdog (zweistufig):
 //   • HW-WDT (esp_task_wdt, 4s) überwacht loop() → harter Reboot
