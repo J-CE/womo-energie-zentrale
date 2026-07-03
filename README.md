@@ -1,4 +1,4 @@
-# Womo Energy Core v5.5
+# Womo Energy Core v5.5.1
 
 Eigenentwickeltes Energiemanagement-System für ein Wohnmobil, basierend auf einem ESP32-S3. Überwacht BMS und MPPT-Laderegler, steuert Verbraucher/Lader automatisch nach Ladezustand und Solarleistung, loggt historische Daten und liefert ein komplett offline-fähiges Web-Dashboard.
 
@@ -34,6 +34,7 @@ Die vollständige GPIO-Belegung steht in `src/config.h` (P-SW03 im Lastenheft).
 - **RGB-Status-LED** zeigt BMS-/MPPT-Fehler, SoC, Landstrom und alle Aktoren gleichzeitig in einem Rundlauf-Muster an
 - **JK-BMS-Anbindung wahlweise über UART-TTL (GPS-Port) oder CAN** (Compile-Zeit-Umschaltung, identischer Datenoutput)
 - **Elektronische Wasserwaage** (optional, MMA8452Q): Neigungsmessung (Roll/Pitch), automatische Keilhöhen-Berechnung pro Rad, eigener Dashboard-Tab mit Libellen-Anzeige und Kalibrierung
+- **Multi-SSID Heim-WLAN** (v5.5.1): bis zu 3 Heimnetze speicherbar — das Modul verbindet sich per Scan mit dem stärksten bekannten Netz, AP bleibt parallel aktiv
 - **Schaltkriterien v5.5**: D+/Gel schalten nur noch über harte Bedingungen ab (Landstrom, BMS ungültig, SoC-Schwelle) — MPPT-Ausfälle und PV-Einbrüche schalten nichts mehr ab; EIN bei genug PV **oder** MPPT-Float. Wechselrichter: Einschalten nur manuell, Automatik nur als Schutz-Abschaltung. Manuelles AUS ist dauerhaft und reboot-fest (NVS)
 - **Web-OTA** (v5.4.1): Firmware- und Dashboard-Updates direkt aus dem Browser (System-Tab), ohne PC/USB — Dual-App-Partitionslayout, Upload mit Fortschrittsanzeige, automatischer Neustart mit Ringpuffer-Sicherung
 

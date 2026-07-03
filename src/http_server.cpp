@@ -1,5 +1,5 @@
 // ============================================================
-//  http_server.cpp — Womo Energy Core v5.5
+//  http_server.cpp — Womo Energy Core v5.5.1
 //
 //  v5.4.1: Web-OTA (/api/ota GET+POST) — Logik im Modul ota.cpp.
 //  v5.0: 12 Parameter (socDPlusHigh/socGelHigh neu,
@@ -30,14 +30,37 @@
 static AsyncWebServer server(WEBSERVER_PORT);
 static AsyncWebSocket ws("/ws");
 
-// ── Heim-WLAN (STA) ───────────────────────────────────────────
-// Credentials liegen im NVS-Namespace "wifi" (getrennt von clock/params).
-// Passwort wird per /api/wifi NIE zurückgegeben.
+// ── Heim-WLAN (STA, v5.5.1: bis zu 3 Netze) ──────────────────
+// Credentials liegen im NVS-Namespace "wifi" (getrennt von clock/params),
+// Schlüssel ssid1/pass1 … ssid3/pass3. Passwort wird per /api/wifi NIE
+// zurückgegeben. Bei mehr als einem konfigurierten Netz wählt ein
+// asynchroner Scan das STÄRKSTE bekannte Netz (Auswertung in wifi_tick,
+// ws_task-Kontext — vollständig non-blocking, AP bleibt aktiv). Bei
+// genau einem Netz: Direktverbindung wie bisher (kein Scan). Bewusst
+// KEINE Arduino-WiFiMulti-Klasse — deren blockierendes run() verträgt
+// sich nicht mit AP+STA-Dualmodus und unserer Reconnect-Strategie.
+#define WIFI_STA_SLOTS            3
+#define WIFI_RESCAN_INTERVAL_MS   60000     // Rescan-Backoff wenn getrennt
 static Preferences  wprefs;
-static bool         s_staEnabled = false;   // SSID konfiguriert?
+static bool         s_staEnabled = false;   // mind. ein Slot konfiguriert?
 // POST setzt nur dieses Flag; die eigentliche WiFi-Rekonfiguration läuft
 // im ws_task-Kontext (webserver_broadcast), NICHT im AsyncTCP-Handler.
 static volatile bool s_wifiReapply = false;
+// Scan-Zustandsmaschine — ausschließlich ws_task schreibt/liest:
+enum StaScanState : uint8_t { STA_IDLE = 0, STA_SCANNING };
+static StaScanState s_staScan     = STA_IDLE;
+static uint32_t     s_staNextScan = 0;      // millis()-Marke für Rescan
+
+static String slot_key (const char* base, uint8_t i) {
+    char k[8]; snprintf(k, sizeof(k), "%s%u", base, (unsigned)(i + 1)); return String(k);
+}
+static String slot_ssid(uint8_t i) { return wprefs.getString(slot_key("ssid", i).c_str(), ""); }
+static String slot_pass(uint8_t i) { return wprefs.getString(slot_key("pass", i).c_str(), ""); }
+static uint8_t slots_configured() {
+    uint8_t n = 0;
+    for (uint8_t i = 0; i < WIFI_STA_SLOTS; i++) if (slot_ssid(i).length()) n++;
+    return n;
+}
 
 static void on_wifi_event(WiFiEvent_t event) {
     switch (event) {
@@ -54,21 +77,84 @@ static void on_wifi_event(WiFiEvent_t event) {
     }
 }
 
-// Liest SSID/PW aus NVS und startet (oder beendet) den STA-Teil.
-// Non-blocking: WiFi.begin() blockiert den Boot/Webserver nicht.
+// Startet (oder beendet) den STA-Teil anhand der konfigurierten Slots.
+// Non-blocking: weder WiFi.begin() noch der asynchrone Scan blockieren
+// Boot/Webserver. 0 Slots → STA aus. 1 Slot → Direktverbindung
+// (AutoReconnect, exakt das Verhalten bis v5.5). >1 Slot → Scan
+// anstoßen; die Auswahl trifft wifi_tick() nach Scan-Ende.
 static void wifi_apply_sta() {
-    String ssid = wprefs.getString("ssid", DEFAULT_WIFI_STA_SSID);
-    String pass = wprefs.getString("pass", DEFAULT_WIFI_STA_PASSWORD);
-
-    s_staEnabled = (ssid.length() > 0);
-    if (s_staEnabled) {
-        WiFi.setAutoReconnect(true);
-        WiFi.begin(ssid.c_str(), pass.c_str());   // non-blocking
-        Serial.printf("[WEB] STA: suche \"%s\" ...\n", ssid.c_str());
-    } else {
-        // SSID leer → STA abschalten, AP bleibt bestehen (eraseap=true).
+    uint8_t n = slots_configured();
+    s_staEnabled = (n > 0);
+    s_staScan    = STA_IDLE;
+    if (!s_staEnabled) {
+        // Alle Slots leer → STA abschalten, AP bleibt bestehen (eraseap=true).
         WiFi.disconnect(false, true);
         Serial.println("[WEB] STA deaktiviert (keine SSID konfiguriert)");
+        return;
+    }
+    if (n == 1) {
+        for (uint8_t i = 0; i < WIFI_STA_SLOTS; i++) {
+            String ssid = slot_ssid(i);
+            if (!ssid.length()) continue;
+            WiFi.setAutoReconnect(true);
+            WiFi.begin(ssid.c_str(), slot_pass(i).c_str());   // non-blocking
+            Serial.printf("[WEB] STA: suche \"%s\" (Slot %u) ...\n",
+                          ssid.c_str(), (unsigned)(i + 1));
+            break;
+        }
+        return;
+    }
+    // Mehrere Kandidaten → asynchroner Scan (AP bleibt aktiv).
+    WiFi.scanDelete();
+    WiFi.scanNetworks(true /*async*/, false /*keine Hidden-SSIDs*/);
+    s_staScan     = STA_SCANNING;
+    s_staNextScan = millis() + WIFI_RESCAN_INTERVAL_MS;
+    Serial.printf("[WEB] STA: %u Netze konfiguriert — Scan läuft ...\n", (unsigned)n);
+}
+
+// v5.5.1: Scan auswerten + Rescan-Backoff. NUR aus webserver_broadcast
+// (ws_task) aufrufen — gleiche Kontext-Regel wie wifi_apply_sta.
+static void wifi_tick() {
+    if (!s_staEnabled) return;
+
+    if (s_staScan == STA_SCANNING) {
+        int16_t r = WiFi.scanComplete();
+        if (r == WIFI_SCAN_RUNNING) return;          // noch nicht fertig
+        int8_t  best = -1; int32_t bestRssi = -128;
+        String  bestSsid, bestPass;
+        for (int16_t k = 0; k < r; k++) {            // r<=0 → Schleife leer
+            String found = WiFi.SSID(k);
+            if (!found.length()) continue;
+            for (uint8_t i = 0; i < WIFI_STA_SLOTS; i++) {
+                if (found == slot_ssid(i) && WiFi.RSSI(k) > bestRssi) {
+                    bestRssi = WiFi.RSSI(k);
+                    bestSsid = found; bestPass = slot_pass(i); best = (int8_t)i;
+                }
+            }
+        }
+        WiFi.scanDelete();
+        s_staScan     = STA_IDLE;
+        s_staNextScan = millis() + WIFI_RESCAN_INTERVAL_MS;
+        if (best >= 0) {
+            WiFi.setAutoReconnect(true);
+            WiFi.begin(bestSsid.c_str(), bestPass.c_str());
+            Serial.printf("[WEB] STA: stärkstes bekanntes Netz \"%s\" (%d dBm, Slot %u)\n",
+                          bestSsid.c_str(), (int)bestRssi, (unsigned)(best + 1));
+        } else {
+            Serial.println("[WEB] STA: kein bekanntes Netz in Reichweite — Rescan in 60s");
+        }
+        return;
+    }
+
+    // Getrennt + mehrere Kandidaten → periodischer Rescan (Heimkehr/
+    // Roaming zwischen bekannten Netzen). Bei genau einem Slot erledigt
+    // das der Arduino-AutoReconnect wie bisher.
+    if (!WiFi.isConnected() && slots_configured() > 1 &&
+        (int32_t)(millis() - s_staNextScan) >= 0) {
+        WiFi.scanDelete();
+        WiFi.scanNetworks(true, false);
+        s_staScan     = STA_SCANNING;
+        s_staNextScan = millis() + WIFI_RESCAN_INTERVAL_MS;
     }
 }
 
@@ -102,7 +188,8 @@ static String build_live_json() {
     bool staUp = WiFi.isConnected();
     j += "\"net\":{\"sta_en\":"   + String(s_staEnabled?"true":"false")
        + ",\"sta\":"              + String(staUp?"true":"false")
-       + ",\"ip\":\""             + (staUp?WiFi.localIP().toString():String(""))
+       + ",\"ssid\":\""           + (staUp?WiFi.SSID():String(""))
+       + "\",\"ip\":\""           + (staUp?WiFi.localIP().toString():String(""))
        + "\",\"rssi\":"           + String(staUp?WiFi.RSSI():0) + "},";
     j += "\"rtc\":"   + clock_rtc_json() + ",";     
     j += "\"sd\":"    + String(logger_sd_available()?"true":"false") + ",";
@@ -300,20 +387,23 @@ static void handle_tz_post(AsyncWebServerRequest* req, uint8_t* data,
               ok?"{\"ok\":true}":"{\"error\":\"TZ ungültig (2..63 Zeichen)\"}");
 }
 
-// ── Heim-WLAN-Status / -Konfiguration ─────────────────────────
+// ── Heim-WLAN-Status / -Konfiguration (v5.5.1: 3 Slots) ───────
 static void handle_wifi_get(AsyncWebServerRequest* req) {
     bool staUp = WiFi.isConnected();
-    String ssid = wprefs.getString("ssid", DEFAULT_WIFI_STA_SSID);
-    char buf[200];
-    // Passwort wird bewusst NICHT ausgeliefert; "set" zeigt nur, ob hinterlegt.
-    snprintf(buf, sizeof(buf),
-        "{\"ssid\":\"%s\",\"set\":%s,\"connected\":%s,\"ip\":\"%s\",\"rssi\":%d}",
-        ssid.c_str(),
-        ssid.length() ? "true" : "false",
-        staUp ? "true" : "false",
-        staUp ? WiFi.localIP().toString().c_str() : "",
-        staUp ? WiFi.RSSI() : 0);
-    req->send(200, "application/json", buf);
+    // Passwörter werden bewusst NICHT ausgeliefert; "set" je Slot zeigt
+    // nur, ob eine SSID hinterlegt ist. "ssid" (top-level) = aktuell
+    // verbundenes Netz.
+    String j = "{\"slots\":[";
+    for (uint8_t i = 0; i < WIFI_STA_SLOTS; i++) {
+        String ssid = slot_ssid(i);
+        if (i) j += ",";
+        j += "{\"ssid\":\"" + ssid + "\",\"set\":" + (ssid.length() ? "true" : "false") + "}";
+    }
+    j += "],\"connected\":" + String(staUp ? "true" : "false")
+       + ",\"ssid\":\""     + (staUp ? WiFi.SSID() : String(""))
+       + "\",\"ip\":\""    + (staUp ? WiFi.localIP().toString() : String(""))
+       + "\",\"rssi\":"     + String(staUp ? WiFi.RSSI() : 0) + "}";
+    req->send(200, "application/json", j);
 }
 
 static void handle_wifi_post(AsyncWebServerRequest* req, uint8_t* data,
@@ -326,13 +416,20 @@ static void handle_wifi_post(AsyncWebServerRequest* req, uint8_t* data,
         req->send(400, "application/json", "{\"error\":\"JSON ungültig\"}");
         return;
     }
+    // v5.5.1: {"slot":1..3,"ssid":..,"pass":..} — fehlender "slot" fällt
+    // auf 1 zurück (Abwärtskompatibilität zum v5.1-Einzel-SSID-Client).
+    uint8_t slot = doc["slot"] | 1;
     String ssid = String((const char*)(doc["ssid"] | ""));
     // Leeres/fehlendes "pass" = vorhandenes Passwort beibehalten.
-    // Explizit löschen über {"ssid":"","pass":""}.
+    // Explizit löschen über {"slot":N,"ssid":"","pass":""}.
     bool hasPass = doc.containsKey("pass");
     String pass = String((const char*)(doc["pass"] | ""));
     free(body);
 
+    if (slot < 1 || slot > WIFI_STA_SLOTS) {
+        req->send(400, "application/json", "{\"error\":\"Slot 1..3\"}");
+        return;
+    }
     if (ssid.length() > 32) {
         req->send(400, "application/json", "{\"error\":\"SSID > 32 Zeichen\"}");
         return;
@@ -342,11 +439,13 @@ static void handle_wifi_post(AsyncWebServerRequest* req, uint8_t* data,
         return;
     }
 
-    wprefs.putString("ssid", ssid);
-    if (ssid.length() == 0)  wprefs.putString("pass", "");      // SSID gelöscht → PW auch
-    else if (hasPass)        wprefs.putString("pass", pass);    // nur bei mitgesendetem PW
+    uint8_t i = slot - 1;
+    wprefs.putString(slot_key("ssid", i).c_str(), ssid);
+    if (ssid.length() == 0)  wprefs.putString(slot_key("pass", i).c_str(), "");   // SSID gelöscht → PW auch
+    else if (hasPass)        wprefs.putString(slot_key("pass", i).c_str(), pass); // nur bei mitgesendetem PW
 
-    Serial.printf("[WEB] STA-Config geändert: SSID=\"%s\"\n", ssid.c_str());
+    Serial.printf("[WEB] STA-Config geändert: Slot %u SSID=\"%s\"\n",
+                  (unsigned)slot, ssid.c_str());
     // Keine WiFi-Calls hier (AsyncTCP-Task) — nur Flag setzen. Die
     // Rekonfiguration erfolgt im ws_task, nachdem dieser Response geflusht ist.
     s_wifiReapply = true;
@@ -563,6 +662,18 @@ void webserver_init() {
     else                        Serial.println("[WEB] LittleFS OK");
 
     wprefs.begin("wifi", false);
+    // v5.5.1-Migration: alten Einzel-Key "ssid"/"pass" nach Slot 1 heben.
+    if (wprefs.isKey("ssid")) {
+        String oSsid = wprefs.getString("ssid", "");
+        String oPass = wprefs.getString("pass", "");
+        if (oSsid.length() && !wprefs.isKey("ssid1")) {
+            wprefs.putString("ssid1", oSsid);
+            wprefs.putString("pass1", oPass);
+            Serial.println("[WEB] WLAN-Migration: SSID nach Slot 1 übernommen");
+        }
+        wprefs.remove("ssid");
+        if (wprefs.isKey("pass")) wprefs.remove("pass");
+    }
     WiFi.onEvent(on_wifi_event);
     WiFi.mode(WIFI_AP_STA);          // AP dauerhaft + optional STA (Heimnetz)
     WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD, WIFI_AP_CHANNEL, 0, WIFI_AP_MAX_CLIENTS);
@@ -622,6 +733,7 @@ void webserver_broadcast() {
         WiFi.disconnect(false, true);     // alte STA-Config verwerfen, AP bleibt
         wifi_apply_sta();                 // neue Credentials anwenden (non-blocking)
     }
+    wifi_tick();   // v5.5.1: Scan-Auswertung / Rescan-Backoff (Multi-SSID)
 
     if (ws.count() == 0) return;
     String json = build_live_json();

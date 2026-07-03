@@ -1,5 +1,5 @@
 // ============================================================
-//  config.h — Womo Energy Core v5.5
+//  config.h — Womo Energy Core v5.5.1
 //  Zielplattform: ESP32-S3 DevKitC-1 N16R8
 //
 //  GPIO-Reservierungen ESP32-S3 N16R8:
@@ -16,10 +16,10 @@
 
 #pragma once
 
-// ── Firmware-Version (v5.5) ──────────────────────────────────
+// ── Firmware-Version (v5.5.1) ────────────────────────────────
 // Zentrale Quelle für Boot-Banner (main.cpp) und /api/ota.
 // Bei jedem Release NUR hier ändern (+ Datei-Kopfzeilen).
-#define FW_VERSION "5.5"
+#define FW_VERSION "5.5.1"
 
 // ============================================================
 //  BLOCK 1 — HARDWARE-KONSTANTEN
@@ -135,13 +135,13 @@
 #define WIFI_AP_MAX_CLIENTS         3
 
 // Heim-WLAN (STA): WoMo bucht sich vor der Haustür ins Heimnetz ein.
-// Konfiguration zur Laufzeit per Dashboard → NVS ("wifi"-Namespace).
-// Diese Defaults greifen nur beim allerersten Boot / leerem NVS.
-// Leere SSID = reiner AP-Betrieb, STA wird nicht gestartet.
+// v5.5.1: bis zu 3 Netze (NVS "wifi", Schlüssel ssid1/pass1..ssid3/pass3),
+// Konfiguration zur Laufzeit per Dashboard. Bei mehreren konfigurierten
+// Netzen wählt ein asynchroner Scan das stärkste bekannte Netz; bei
+// genau einem Netz Direktverbindung wie bisher. Alle Slots leer =
+// reiner AP-Betrieb. Details: http_server.cpp (wifi_apply_sta/wifi_tick).
 // APSTA teilt EIN Radio: bei STA-Verbindung wandert der AP zwingend
 // auf den Router-Kanal (WIFI_AP_CHANNEL gilt nur ohne STA-Verbindung).
-#define DEFAULT_WIFI_STA_SSID       ""
-#define DEFAULT_WIFI_STA_PASSWORD   ""
 
 // ── Webserver ────────────────────────────────────────────────
 #define WEBSERVER_PORT              80          // WS auf /ws, gleichem Port

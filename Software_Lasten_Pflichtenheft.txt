@@ -1,6 +1,6 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║     LASTEN- UND PFLICHTENHEFT — SOFTWARE                        ║
-║     Womo Energy Core v5.5                                        ║
+║     Womo Energy Core v5.5.1                                      ║
 ║     Stand: Schaltkriterien-Redesign (nur harte AUS-Bedingungen, ║
 ║            Float-Erkennung, WR nur manuell EIN) + D+-Pegel-Fix  ║
 ║            (Active-HIGH) + Lagesensor Überkopf-Einbau/Fehler-   ║
@@ -134,12 +134,28 @@ L-SW09 | SD-LOGGING                                        [MUSS]
   PV-Strom, MPPT-Status, Fehler, Landstrom/Aktoren-Flags.
   Alle SD-Zugriffe aus allen Tasks über g_sdMutex synchronisiert.
 
-L-SW10 | WEBINTERFACE — ZUGANG                             [MUSS]
+L-SW10 | WEBINTERFACE — ZUGANG  [GEÄNDERT v5.5.1]          [MUSS]
   ESP32-S3 arbeitet als WLAN Access Point.
   SSID: GODMODULE | Passwort: BM-hy678 | Kanal: 6 | Max. 3 Clients.
   Erreichbar unter http://192.168.4.1 (AP-Standard-IP).
   Komplett offline-fähig — kein Internet erforderlich.
   Dashboard wird aus LittleFS (/index.html) geliefert.
+  Heim-WLAN (STA, Dualmodus seit v5.1): parallel zum AP kann sich
+  das Modul in ein Heimnetz einbuchen (Dashboard dann auch über die
+  Heimnetz-IP erreichbar). APSTA teilt EIN Radio — bei STA-
+  Verbindung wandert der AP zwingend auf den Router-Kanal.
+  Multi-SSID (v5.5.1): bis zu 3 Netze konfigurierbar (NVS "wifi",
+  ssid1/pass1..ssid3/pass3; Migration hebt den alten Einzel-Key
+  beim ersten Boot nach Slot 1). Bei >1 konfiguriertem Netz wählt
+  ein ASYNCHRONER Scan das stärkste bekannte Netz (Auswertung im
+  ws_task, vollständig non-blocking, AP bleibt aktiv); solange
+  getrennt, Rescan alle 60s (Heimkehr/Roaming). Bei genau einem
+  Netz Direktverbindung mit Arduino-AutoReconnect (Verhalten wie
+  bis v5.5). Bewusst KEINE Arduino-WiFiMulti-Klasse: deren
+  blockierendes run() verträgt sich nicht mit dem AP+STA-Dualmodus
+  und der bestehenden Reconnect-Strategie.
+  Alle Slots leer = reiner AP-Betrieb.
+  Passwörter werden über die API nie zurückgegeben.
 
 L-SW11 | WEBINTERFACE — LIVE-DASHBOARD                     [MUSS]
   Aktualisierung alle 2 Sekunden via WebSocket (Pfad /ws, Port 80).
@@ -609,6 +625,14 @@ P-SW12 | WEBSERVER-ARCHITEKTUR
     POST /api/time           → Browser-Zeit-Sync {"epoch":...}
     GET  /api/tz             → Zeitzone {tz, abbr, offset}
     POST /api/tz             → POSIX-TZ setzen {"tz":"..."}
+    GET  /api/wifi           → STA-Status + 3 Slots {slots:[{ssid,
+                               set}],connected,ssid,ip,rssi} — ohne
+                               Passwörter (v5.5.1; Endpunkt existierte
+                               seit v5.1, fehlte hier in der Liste)
+    POST /api/wifi           → Slot setzen {"slot":1..3,"ssid","pass"}
+                               (ohne "slot" → Slot 1, abwärtskompat.;
+                               leere SSID löscht den Slot; fehlendes
+                               "pass" behält das gespeicherte)
     GET  /api/buffer         → Ringpuffer (?offset&count&step)
     GET  /api/sdfiles        → Liste CSV-Dateien auf SD
     GET  /api/sddata         → SD-Datei lesen (?file&skip&limit)
@@ -1001,6 +1025,30 @@ P-SW20 | WEB-OTA (ota.h/.cpp)  [NEU v5.4.1]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ÄNDERUNGSPROTOKOLL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+─── v5.5 → v5.5.1 ───────────────────────────────────────────────
+
+  MULTI-SSID HEIM-WLAN:
+  • Bis zu 3 Heimnetze konfigurierbar (NVS "wifi": ssid1/pass1 …
+    ssid3/pass3). Migration in webserver_init(): alter Einzel-Key
+    "ssid"/"pass" wird beim ersten Boot nach Slot 1 gehoben und
+    entfernt. [L-SW10]
+  • Auswahlstrategie: >1 Netz → asynchroner WiFi-Scan, Verbindung
+    zum STÄRKSTEN bekannten Netz; Auswertung in wifi_tick() im
+    ws_task (gleiche Kontext-Regel wie das Deferred-Apply — keine
+    WiFi-Calls im AsyncTCP-Handler). Solange getrennt: Rescan alle
+    60s. Genau 1 Netz → Direktverbindung + AutoReconnect (Verhalten
+    identisch zu v5.5). Keine WiFiMulti-Klasse (blockierendes run()
+    inkompatibel mit AP+STA-Dualmodus). [L-SW10, P-SW12]
+  • /api/wifi: GET liefert slots[]+verbundene SSID, POST nimmt
+    {"slot":1..3,...}; ohne "slot" abwärtskompatibel Slot 1.
+    Endpunkt dabei erstmals in die P-SW12-Endpunktliste aufgenommen
+    (fehlte dort seit v5.1 — Doku-Lücke). [P-SW12]
+  • Dashboard: WLAN-Karte mit 3 Slot-Zeilen (SSID+Passwort+
+    Speichern je Slot); Statuszeile zeigt jetzt die verbundene
+    SSID. live-JSON net{} um "ssid" erweitert.
+  • DEFAULT_WIFI_STA_SSID/PASSWORD aus config.h entfernt (seit dem
+    Slot-Modell ungenutzt; Slots defaulten auf leer).
 
 ─── v5.4.1 → v5.5 ───────────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     index.html — Womo Energy Core v5.5
+     index.html — Womo Energy Core v5.5.1
      Dashboard: BMS · MPPT · Schaltlogik · Logging · Parameter · Zeitzone
      Eingebettet in LittleFS, erreichbar via http://192.168.4.1
      WLAN AP: GODMODULE (Passwort: BM-hy678)
@@ -152,7 +152,7 @@
 <header>
   <div class="brand">
     <div class="logo">G</div>
-    <div><h1>GODMODULE · Energy Core</h1><div class="sub">Womo Energy Core v5.5</div></div>
+    <div><h1>GODMODULE · Energy Core</h1><div class="sub">Womo Energy Core v5.5.1</div></div>
   </div>
   <div class="pills">
     <span class="pill"><span id="dWs" class="dot"></span><span id="tWs">Verbinde…</span></span>
@@ -475,19 +475,26 @@
     </div>
 
     <div class="card wide netz">
-      <div class="ch"><h2>Heim-WLAN</h2><span class="badge">STA · bucht sich vor der Haustür ein</span></div>
+      <div class="ch"><h2>Heim-WLAN</h2><span class="badge">STA · bis zu 3 Netze · stärkstes gewinnt</span></div>
       <div class="params">
         <div class="field"><label>Status</label>
-          <div class="hint">AP läuft immer. Bei Heimnetz-Verbindung wandert der AP auf dessen Kanal.</div>
+          <div class="hint">AP läuft immer. Bei mehreren Netzen verbindet sich das Modul mit dem stärksten bekannten; bei Heimnetz-Verbindung wandert der AP auf dessen Kanal.</div>
           <div class="ip"><span class="curval" id="wifiNow">–</span></div></div>
-        <div class="field"><label>Heimnetz-SSID</label>
-          <div class="hint">Leer lassen und speichern = STA aus, reiner AP-Betrieb.</div>
-          <div class="ip"><input type="text" id="wifiSsid" placeholder="MeinHeimnetz" maxlength="32" spellcheck="false" autocomplete="off"></div></div>
-        <div class="field"><label>Passwort</label>
+        <div class="field"><label>Netz 1 — SSID</label>
+          <div class="hint">SSID leeren und speichern = Slot löschen. Alle Slots leer = reiner AP-Betrieb.</div>
+          <div class="ip"><input type="text" id="wifiSsid1" placeholder="MeinHeimnetz" maxlength="32" spellcheck="false" autocomplete="off"></div></div>
+        <div class="field"><label>Netz 1 — Passwort</label>
           <div class="hint">Leer lassen = vorhandenes Passwort behalten. Min. 8 Zeichen (WPA).</div>
-          <div class="ip"><input type="password" id="wifiPass" placeholder="••••••••" maxlength="63" spellcheck="false" autocomplete="off"></div></div>
+          <div class="ip"><input type="password" id="wifiPass1" placeholder="••••••••" maxlength="63" spellcheck="false" autocomplete="off"><button type="button" class="btn primary" id="wifiSave1">Speichern</button></div></div>
+        <div class="field"><label>Netz 2 — SSID</label>
+          <div class="ip"><input type="text" id="wifiSsid2" placeholder="z. B. Hotspot" maxlength="32" spellcheck="false" autocomplete="off"></div></div>
+        <div class="field"><label>Netz 2 — Passwort</label>
+          <div class="ip"><input type="password" id="wifiPass2" placeholder="••••••••" maxlength="63" spellcheck="false" autocomplete="off"><button type="button" class="btn primary" id="wifiSave2">Speichern</button></div></div>
+        <div class="field"><label>Netz 3 — SSID</label>
+          <div class="ip"><input type="text" id="wifiSsid3" placeholder="z. B. Stellplatz" maxlength="32" spellcheck="false" autocomplete="off"></div></div>
+        <div class="field"><label>Netz 3 — Passwort</label>
+          <div class="ip"><input type="password" id="wifiPass3" placeholder="••••••••" maxlength="63" spellcheck="false" autocomplete="off"><button type="button" class="btn primary" id="wifiSave3">Speichern</button></div></div>
         <div class="actions">
-          <button type="button" class="btn primary" id="wifiSaveBtn">WLAN speichern</button>
           <button type="button" class="btn ghost" id="wifiRevertBtn">Verwerfen</button>
         </div>
       </div>
@@ -496,7 +503,7 @@
 </main>
 
 <div id="toast"></div>
-<div class="foot">GODMODULE · Energy Core v5.5 · WLAN: GODMODULE · http://192.168.4.1 · <span id="footTz">MEZ</span></div>
+<div class="foot">GODMODULE · Energy Core v5.5.1 · WLAN: GODMODULE · http://192.168.4.1 · <span id="footTz">MEZ</span></div>
 
 <script>
 "use strict";
@@ -616,8 +623,8 @@ function render(D){
   const net=D.net;const wn=$("wifiNow");
   if(net&&wn){
     wn.textContent = !net.sta_en ? "STA aus · reiner AP-Betrieb"
-      : net.sta ? `verbunden · ${net.ip||"?"} · ${net.rssi||0} dBm`
-      : "gesucht · nicht in Reichweite";
+      : net.sta ? `verbunden · ${net.ssid||"?"} · ${net.ip||"?"} · ${net.rssi||0} dBm`
+      : "gesucht · kein bekanntes Netz in Reichweite";
   }
   renderLevel(D.level);
 }
@@ -803,35 +810,40 @@ $("tzSaveBtn").onclick=async()=>{
   }catch(_){toast("Speichern fehlgeschlagen","bad");}finally{$("tzSaveBtn").disabled=false;}
 };
 
-/* ---- Heim-WLAN (STA) ---- */
+/* ---- Heim-WLAN (STA, v5.5.1: 3 Slots) ---- */
 function wifiStatusText(w){
-  if(!w||!w.set) return "STA aus · reiner AP-Betrieb";
-  if(w.connected) return `verbunden · ${w.ip||"?"} · ${w.rssi||0} dBm`;
-  return `gesucht: ${w.ssid||"?"} · nicht in Reichweite`;
+  const any=(w&&w.slots||[]).some(s=>s.set);
+  if(!any) return "STA aus · reiner AP-Betrieb";
+  if(w.connected) return `verbunden · ${w.ssid||"?"} · ${w.ip||"?"} · ${w.rssi||0} dBm`;
+  return "gesucht · kein bekanntes Netz in Reichweite";
 }
 async function loadWifi(){
   try{const r=await fetch("/api/wifi",{cache:"no-store"});const w=await r.json();
-    $("wifiSsid").value=w.ssid||"";
-    $("wifiPass").value="";
+    for(let i=1;i<=3;i++){
+      const sl=(w.slots||[])[i-1]||{};
+      $("wifiSsid"+i).value=sl.ssid||"";
+      $("wifiPass"+i).value="";
+    }
     $("wifiNow").textContent=wifiStatusText(w);
   }catch(_){$("wifiNow").textContent="–";}
 }
 $("wifiRevertBtn").onclick=loadWifi;
-$("wifiSaveBtn").onclick=async()=>{
-  const ssid=$("wifiSsid").value.trim();
-  const pass=$("wifiPass").value;        // nicht trimmen: Leerzeichen können gültig sein
+async function saveWifiSlot(slot){
+  const ssid=$("wifiSsid"+slot).value.trim();
+  const pass=$("wifiPass"+slot).value;   // nicht trimmen: Leerzeichen können gültig sein
   if(ssid.length>32){toast("SSID > 32 Zeichen","bad");return;}
   if(ssid.length&&pass.length&&pass.length<8){toast("WPA-Passwort < 8 Zeichen","bad");return;}
-  const body={ssid};
+  const body={slot,ssid};
   if(pass.length) body.pass=pass;        // leeres PW → Server behält altes
   if(!ssid.length) body.pass="";         // SSID gelöscht → PW mitlöschen
-  $("wifiSaveBtn").disabled=true;
+  const btn=$("wifiSave"+slot);btn.disabled=true;
   try{const r=await fetch("/api/wifi",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     const res=await r.json();
-    if(r.ok&&res.ok){toast(ssid.length?"WLAN gespeichert — verbinde …":"STA deaktiviert","ok");setTimeout(loadWifi,1500);}
+    if(r.ok&&res.ok){toast(ssid.length?`Netz ${slot} gespeichert — verbinde …`:`Netz ${slot} gelöscht`,"ok");setTimeout(loadWifi,1500);}
     else toast(res.error||"Fehler","bad");
-  }catch(_){toast("Speichern fehlgeschlagen","bad");}finally{$("wifiSaveBtn").disabled=false;}
-};
+  }catch(_){toast("Speichern fehlgeschlagen","bad");}finally{btn.disabled=false;}
+}
+for(let i=1;i<=3;i++)$("wifiSave"+i).onclick=()=>saveWifiSlot(i);
 
 /* ---- Web-OTA (v5.4.1) ---- */
 async function loadOta(){
