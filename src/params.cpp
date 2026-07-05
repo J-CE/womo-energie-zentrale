@@ -1,5 +1,6 @@
 // ============================================================
-//  params.cpp — Womo Energy Core v5.5
+//  params.cpp — Womo Energy Core v5.6.0
+//  v5.6.0: params_apply_json() — gemeinsamer Pfad HTTP+BLE (s. params.h).
 //  v5.5: Parameterbereinigung (13→10, s. params.h). Entfallene
 //  NVS-Schlüssel werden beim ersten Boot aufgeräumt; neue Schlüssel
 //  (pvDPlusMinW, socGelOff) mit Defaults angelegt. Bestehende Werte
@@ -9,6 +10,7 @@
 // ============================================================
 #include "params.h"
 #include <Preferences.h>
+#include <ArduinoJson.h>   // v5.6.0: params_apply_json
 
 Params g_params;
 static Preferences prefs;
@@ -136,6 +138,26 @@ bool params_set_log_interval_ms(uint32_t v) {
 bool params_set_manual_timeout_min(uint8_t v) {
     if (v < 1 || v > 240) return false;
     g_params.manualTimeoutMin = v; prefs.putUChar("manualTOMin", v); return true;
+}
+
+// v5.6.0: Gemeinsamer Anwendungspfad HTTP (POST /api/params) + BLE
+// ({"cmd":"params_set"}). Logik 1:1 aus dem bisherigen HTTP-Handler
+// übernommen (v5.5-Parametersatz) — der Handler ruft jetzt hierher.
+bool params_apply_json(const char* json) {
+    StaticJsonDocument<512> doc;
+    if (deserializeJson(doc, json)) return false;
+    bool ok = true;
+    if (doc.containsKey("socDPlusOn"))          ok &= params_set_soc_dplus_on         (doc["socDPlusOn"]);
+    if (doc.containsKey("socDPlusOff"))         ok &= params_set_soc_dplus_off        (doc["socDPlusOff"]);
+    if (doc.containsKey("pvDPlusMinW"))         ok &= params_set_pv_dplus_min_w       (doc["pvDPlusMinW"]);
+    if (doc.containsKey("socGelOn"))            ok &= params_set_soc_gel_on           (doc["socGelOn"]);
+    if (doc.containsKey("socGelOff"))           ok &= params_set_soc_gel_off          (doc["socGelOff"]);
+    if (doc.containsKey("pvGelMinW"))           ok &= params_set_pv_gel_min_w         (doc["pvGelMinW"]);
+    if (doc.containsKey("socWROff"))            ok &= params_set_soc_wr_off           (doc["socWROff"]);
+    if (doc.containsKey("relayDebounceCycles")) ok &= params_set_relay_debounce_cycles(doc["relayDebounceCycles"]);
+    if (doc.containsKey("logIntervalMs"))       ok &= params_set_log_interval_ms      (doc["logIntervalMs"]);
+    if (doc.containsKey("manualTimeoutMin"))    ok &= params_set_manual_timeout_min   (doc["manualTimeoutMin"]);
+    return ok;
 }
 
 String params_to_json() {

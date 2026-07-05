@@ -1,6 +1,13 @@
 // ============================================================
-//  params.h — Womo Energy Core v5.5
+//  params.h — Womo Energy Core v5.6.0
 //  10 NVS-Parameter (Namespace "womo_cfg")
+//
+//  v5.6.0: params_apply_json() — gemeinsamer Anwendungs-/
+//   Validierungspfad für POST /api/params (HTTP) und
+//   {"cmd":"params_set"} (BLE). Semantik unverändert:
+//   nur vorhandene Schlüssel werden gesetzt, jeder über die
+//   bestehenden Setter (Bereichsprüfung), Rückgabe false sobald
+//   EIN Wert außerhalb der Grenzen liegt.
 //
 //  v5.5 Änderungen (Kriterien-Redesign, s. logic.cpp/L-SW03..05):
 //   - socDPlusHigh   (kein weiches PV-AUS mehr)
@@ -57,3 +64,7 @@ bool params_set_log_interval_ms      (uint32_t v);
 bool params_set_manual_timeout_min   (uint8_t  v);
 
 String params_to_json();
+
+// JSON-Objekt (nur bekannte Schlüssel) anwenden — s. Kopfkommentar.
+// Rückgabe: false bei ungültigem JSON oder Wert außerhalb Grenzen.
+bool params_apply_json(const char* json);

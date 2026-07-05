@@ -1,5 +1,7 @@
 // ============================================================
-//  ota.h — Womo Energy Core v5.5.1
+//  ota.h — Womo Energy Core v5.6.0
+//  v5.6.0: ota_schedule_reboot() exportiert — sicherer Neustart-
+//  Pfad (Ringpuffer-Sicherung) auch für andere Module (BLE-Toggle).
 //  Web-OTA: Firmware- und Dashboard-Update per Browser-Upload
 //
 //  Zwei Update-Typen (POST /api/ota?type=…):
@@ -39,3 +41,8 @@ void ota_handle_request(AsyncWebServerRequest* req);
 // Aus loop() aufrufen: führt den geplanten Neustart aus
 // (Ringpuffer-Sicherung + ESP.restart()).
 void ota_tick();
+
+// v5.6.0: Deferred-Reboot von außen planen (z. B. BLE-Toggle).
+// Ausführung wie beim OTA-Reboot in ota_tick() aus loop() —
+// darf aus AsyncTCP-Handlern aufgerufen werden (setzt nur Flag).
+void ota_schedule_reboot(uint32_t delayMs);

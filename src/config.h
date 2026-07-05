@@ -1,7 +1,9 @@
 // ============================================================
-//  config.h — Womo Energy Core v5.5.3
+//  config.h — Womo Energy Core v5.6.0
 //  Zielplattform: ESP32-S3 DevKitC-1 N16R8
 //
+//  v5.6.0: BLE GATT-Server (NUS). Neuer Define-Block "Bluetooth
+//          Low Energy" (Name, MTU, Queue); BLE_PASSKEY → secrets.h.
 //  v5.5.3: NTP-Sync-Status im Dashboard (net.ntp im Live-JSON).
 //  v5.5.2: mDNS (womo.local) + NTP-Zeitsync (STA). Neue Defines
 //          MDNS_HOSTNAME und NTP_SERVER im Netzwerkdienst-Block.
@@ -20,10 +22,10 @@
 
 #pragma once
 
-// ── Firmware-Version (v5.5.3) ────────────────────────────────
+// ── Firmware-Version (v5.6.0) ────────────────────────────────
 // Zentrale Quelle für Boot-Banner (main.cpp) und /api/ota.
 // Bei jedem Release NUR hier ändern (+ Datei-Kopfzeilen).
-#define FW_VERSION "5.5.3"
+#define FW_VERSION "5.6.0"
 
 // ============================================================
 //  BLOCK 1 — HARDWARE-KONSTANTEN
@@ -161,6 +163,18 @@
 // derselbe Pfad wie der Browser-Sync; im AP-Only-Betrieb bleibt der
 // Browser die Zeitquelle. Kein configTime() → POSIX-TZ bleibt unberührt.
 #define NTP_SERVER                  "pool.ntp.org"
+
+// ── Bluetooth Low Energy (v5.6.0) ────────────────────────────
+// GATT-Server mit Nordic UART Service (NUS) — newline-delimited
+// JSON, Live-Push alle 2s + Kommandos (s. ble.h). Passkey-Pairing
+// (BLE_PASSKEY in secrets.h). Schalter: NVS "ble"/"en", Toggle im
+// Dashboard (System-Tab) → deferred Reboot. NimBLE + WiFi koexistent
+// (Kostenpunkt ≈ 70–90 KB Heap bei aktivem Stack).
+#define BLE_DEVICE_NAME             "WomoEnergy" // Advertising-Name
+#define DEFAULT_BLE_ENABLED         1            // NVS-Default: an
+#define BLE_PREF_MTU                517          // max. MTU-Angebot (Client handelt)
+#define BLE_RX_LINE_MAX             256          // max. Kommandozeile (Byte)
+#define BLE_RX_QUEUE_LEN            4            // RX-Queue-Tiefe (Zeilen)
 
 // ── RAM-Ringpuffer (PSRAM) ───────────────────────────────────
 #define LOG_BUFFER_SIZE             86400       // 48h @ 2s = 86400 Einträge

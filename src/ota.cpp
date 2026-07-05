@@ -1,5 +1,6 @@
 // ============================================================
-//  ota.cpp — Womo Energy Core v5.5.1
+//  ota.cpp — Womo Energy Core v5.6.0
+//  v5.6.0: ota_schedule_reboot() (s. ota.h).
 //  Web-OTA: Firmware- und Dashboard-Update per Browser-Upload
 //
 //  Konzeption:
@@ -218,6 +219,12 @@ void ota_handle_request(AsyncWebServerRequest* req) {
         req->send(400, "application/json", "{\"error\":\"" + e + "\"}");
     }
     // st NICHT freigeben: der Request-Destruktor ruft free(_tempObject).
+}
+
+// v5.6.0: Neustart-Planung für andere Module (setzt nur das Flag;
+// die eigentliche Arbeit macht ota_tick im loop-Kontext).
+void ota_schedule_reboot(uint32_t delayMs) {
+    s_rebootAtMs = millis() + delayMs;
 }
 
 // ── Deferred-Reboot (loop-Kontext, Core 1) ────────────────────
