@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     index.html — Womo Energy Core v5.5.1
+     index.html — Womo Energy Core v5.5.3
      Dashboard: BMS · MPPT · Schaltlogik · Logging · Parameter · Zeitzone
      Eingebettet in LittleFS, erreichbar via http://192.168.4.1
      WLAN AP: GODMODULE (Passwort: BM-hy678)
@@ -152,7 +152,7 @@
 <header>
   <div class="brand">
     <div class="logo">G</div>
-    <div><h1>GODMODULE · Energy Core</h1><div class="sub">Womo Energy Core v5.5.1</div></div>
+    <div><h1>GODMODULE · Energy Core</h1><div class="sub">Womo Energy Core v5.5.3</div></div>
   </div>
   <div class="pills">
     <span class="pill"><span id="dWs" class="dot"></span><span id="tWs">Verbinde…</span></span>
@@ -467,6 +467,9 @@
         <div class="field"><label>Aktuell aktiv</label>
           <div class="hint">Vom Gerät gemeldete Abkürzung und Offset.</div>
           <div class="ip"><span class="curval" id="tzNow">–</span></div></div>
+        <div class="field"><label>NTP-Zeitsync</label>
+          <div class="hint">Automatisch bei Heimnetz-Verbindung mit Internet. Im reinen AP-Betrieb stellt der Browser die Uhr.</div>
+          <div class="ip"><span class="curval" id="ntpNow">–</span></div></div>
         <div class="actions">
           <button type="button" class="btn primary" id="tzSaveBtn">Zeitzone speichern</button>
           <button type="button" class="btn ghost" id="tzRevertBtn">Verwerfen</button>
@@ -503,7 +506,7 @@
 </main>
 
 <div id="toast"></div>
-<div class="foot">GODMODULE · Energy Core v5.5.1 · WLAN: GODMODULE · http://192.168.4.1 · <span id="footTz">MEZ</span></div>
+<div class="foot">GODMODULE · Energy Core v5.5.3 · WLAN: GODMODULE · http://192.168.4.1 · <span id="footTz">MEZ</span></div>
 
 <script>
 "use strict";
@@ -625,6 +628,16 @@ function render(D){
     wn.textContent = !net.sta_en ? "STA aus · reiner AP-Betrieb"
       : net.sta ? `verbunden · ${net.ssid||"?"} · ${net.ip||"?"} · ${net.rssi||0} dBm`
       : "gesucht · kein bekanntes Netz in Reichweite";
+  }
+  const nt=$("ntpNow");
+  if(nt){
+    if(net&&net.ntp>1704067200){
+      const off=(gEpochMez||0)-(D.epoch||0);          // lokaler Offset (DST-korrekt)
+      const loc=(net.ntp+off)*1000;
+      nt.textContent="zuletzt "+new Date(loc).toLocaleString("de-DE",{timeZone:"UTC"});
+    }else{
+      nt.textContent="noch nicht synchronisiert";
+    }
   }
   renderLevel(D.level);
 }

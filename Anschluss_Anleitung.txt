@@ -146,6 +146,18 @@ Spannungsteiler bringt 5V auf ESP-tauglichen Pegel:
 WICHTIG: pinMode INPUT (nicht INPUT_PULLUP) — interner Pull-up läge
   parallel zum 1,5k und verschöbe den Teiler. HIGH = Landstrom.
 
+  OPTIONALE ALTERNATIVQUELLE (NICHT umgesetzt, nur informativ):
+  Statt des 5V-Netzteils lässt sich das Signal "Netzkontrolle" des
+  EBL 29 abgreifen — Block 3, Pin 6, Aderfarbe schwarz. Gemessen
+  gegen Aufbau-Minus: ~12V (plusgeschaltet) bei anliegendem 230V,
+  0V ohne Netz. Da 12V > GPIO-Max, ist eine Pegelanpassung nötig:
+  Spannungsteiler + Schottky-Klemme gegen 3V3 oder PC817-Optokoppler.
+  Die Logik bliebe HIGH = Landstrom, io_read_landstrom() unverändert.
+  Vorteil: 5V-Netzteil entfällt. NICHT realisiert, da der dafür
+  nötige Platinen-Umbau den Nutzen nicht rechtfertigt.
+  Hinweis: Die Netzkontrolle zeigt streng genommen "Lader aktiv",
+  in der Praxis deckungsgleich mit "230V liegt an".
+
 ──────────────────────────────────────────────────────────────────
 MODUL 5 — SD-Karte (SPI)
 ──────────────────────────────────────────────────────────────────

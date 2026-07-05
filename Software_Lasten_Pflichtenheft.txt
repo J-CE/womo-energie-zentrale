@@ -1,11 +1,13 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║     LASTEN- UND PFLICHTENHEFT — SOFTWARE                        ║
-║     Womo Energy Core v5.5.1                                      ║
+║     Womo Energy Core v5.5.3                                      ║
 ║     Stand: Schaltkriterien-Redesign (nur harte AUS-Bedingungen, ║
 ║            Float-Erkennung, WR nur manuell EIN) + D+-Pegel-Fix  ║
 ║            (Active-HIGH) + Lagesensor Überkopf-Einbau/Fehler-   ║
 ║            toleranz + persistentes Manuell-AUS + Web-OTA +      ║
 ║            Lagesensor (MMA8452Q) + Renogy-NVS-Wechselrichter    ║
+║            + mDNS (womo.local) + NTP-Zeitsync (v5.5.2)          ║
+║            + NTP-Sync-Statusanzeige im Dashboard (v5.5.3)       ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -134,10 +136,16 @@ L-SW09 | SD-LOGGING                                        [MUSS]
   PV-Strom, MPPT-Status, Fehler, Landstrom/Aktoren-Flags.
   Alle SD-Zugriffe aus allen Tasks über g_sdMutex synchronisiert.
 
-L-SW10 | WEBINTERFACE — ZUGANG  [GEÄNDERT v5.5.1]          [MUSS]
+L-SW10 | WEBINTERFACE — ZUGANG  [GEÄNDERT v5.5.2]          [MUSS]
   ESP32-S3 arbeitet als WLAN Access Point.
   SSID: GODMODULE | Passwort: BM-hy678 | Kanal: 6 | Max. 3 Clients.
   Erreichbar unter http://192.168.4.1 (AP-Standard-IP).
+  mDNS (v5.5.2): zusätzlich per Namen unter http://womo.local
+  erreichbar — sowohl im AP-Modus als auch (nach Heimnetz-Verbindung)
+  über die Heimnetz-IP. Der Dienst wird beim Boot angekündigt und bei
+  STA-Verbindung erneut propagiert (Reannounce im ws_task, gleiche
+  Kontext-Regel wie die WLAN-Rekonfiguration). Hostname: MDNS_HOSTNAME
+  in config.h ("womo"). HTTP-Dienst auf WEBSERVER_PORT (80).
   Komplett offline-fähig — kein Internet erforderlich.
   Dashboard wird aus LittleFS (/index.html) geliefert.
   Heim-WLAN (STA, Dualmodus seit v5.1): parallel zum AP kann sich
@@ -220,7 +228,7 @@ L-SW18 | DELPHI FIREMONKEY APP (PHASE 2)                  [SOLLTE]
   Implementierung nach Fertigstellung der ESP32-Firmware.
   Anforderungen: Live-Daten, historische Charts, Read-Only + Reset.
 
-L-SW19 | ZEITBASIS (DS3231-RTC FÜHREND)  [GEÄNDERT v5.1]  [MUSS]
+L-SW19 | ZEITBASIS (DS3231-RTC FÜHREND)  [GEÄNDERT v5.5.3]  [MUSS]
   Speicher- und Rechenformat ist IMMER UTC. Anzeige und lokale
   CSV-Spalte nutzen eine wählbare Zeitzone mit automatischer
   Sommer-/Winterzeit (DST) — Default Europe/Berlin (MEZ/MESZ).
@@ -237,6 +245,21 @@ L-SW19 | ZEITBASIS (DS3231-RTC FÜHREND)  [GEÄNDERT v5.1]  [MUSS]
   und Drift-Korrektur erhalten und schreibt zusätzlich die DS3231-
   Hardware-Uhr. Tägliche Resync gegen DS3231 bei UTC-Tageswechsel
   inkl. Drift-Messung (Soll- vs. Ist-Zeit in Sekunden).
+  NTP (v5.5.2): Sobald eine STA-Verbindung (Heimnetz mit Internet)
+  besteht, stellt sich die Uhr automatisch per SNTP — der Browser-
+  Sync ist dafür nicht mehr nötig, bleibt aber der Weg im AP-Only-
+  Betrieb (WoMo unterwegs, kein Internet). Bewusst rohe esp_sntp-API
+  im POLL-Modus, KEIN configTime() — letzteres würde den POSIX-TZ
+  überschreiben. SNTP stellt die System-UTC (settimeofday); ein
+  Callback meldet den Sync, das Übertragen in die DS3231-Zeitbasis
+  läuft über clock_set_epoch() im ws_task (kein I2C im SNTP-Task).
+  Damit gilt für NTP dieselbe 5-s-Hysterese wie für den Browser-Sync;
+  der POLL-Modus resynct danach selbstständig periodisch. NTP-Server:
+  NTP_SERVER in config.h (globaler Pool "pool.ntp.org", auslandstauglich).
+  Anzeige (v5.5.3): Der Zeitpunkt des letzten erfolgreichen NTP-Syncs
+  wird als UTC-Epoch im Live-JSON (net.ntp, 0 = nie) geführt und im
+  Dashboard-Zeitzone-Tab lokalzeit-formatiert angezeigt ("noch nicht
+  synchronisiert", solange kein Sync erfolgt ist).
   Alle Log-Zeitstempel (RAM und CSV) und SD-Dateinamen nutzen
   UTC-Epoch intern. Nur Dashboard-Anzeige und die lokale CSV-Spalte
   (ts_mez) werden über den TZ-Offset (DST-korrekt) umgerechnet.

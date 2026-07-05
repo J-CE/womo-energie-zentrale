@@ -1,6 +1,10 @@
 // ============================================================
-//  config.h — Womo Energy Core v5.5.1
+//  config.h — Womo Energy Core v5.5.3
 //  Zielplattform: ESP32-S3 DevKitC-1 N16R8
+//
+//  v5.5.3: NTP-Sync-Status im Dashboard (net.ntp im Live-JSON).
+//  v5.5.2: mDNS (womo.local) + NTP-Zeitsync (STA). Neue Defines
+//          MDNS_HOSTNAME und NTP_SERVER im Netzwerkdienst-Block.
 //
 //  GPIO-Reservierungen ESP32-S3 N16R8:
 //  ├─ GPIO  0,3      Strapping                  → gesperrt
@@ -16,10 +20,10 @@
 
 #pragma once
 
-// ── Firmware-Version (v5.5.1) ────────────────────────────────
+// ── Firmware-Version (v5.5.3) ────────────────────────────────
 // Zentrale Quelle für Boot-Banner (main.cpp) und /api/ota.
 // Bei jedem Release NUR hier ändern (+ Datei-Kopfzeilen).
-#define FW_VERSION "5.5.1"
+#define FW_VERSION "5.5.3"
 
 // ============================================================
 //  BLOCK 1 — HARDWARE-KONSTANTEN
@@ -145,6 +149,18 @@
 
 // ── Webserver ────────────────────────────────────────────────
 #define WEBSERVER_PORT              80          // WS auf /ws, gleichem Port
+
+// ── Netzwerkdienste (v5.5.2) ─────────────────────────────────
+// mDNS: Erreichbarkeit unter "<host>.local" ohne IP — greift sowohl im
+// AP-Modus (192.168.4.1) als auch nach STA-Verbindung (Heimnetz-IP).
+// Bei STA-Verbindung wird der Dienst neu angekündigt (http_server.cpp).
+#define MDNS_HOSTNAME               "womo"      // → http://womo.local
+// NTP: Zeitsync NUR über STA (Internet). Der globale Pool routet zum
+// nächstgelegenen Server — bewusst kein Länder-Pool, damit der Sync auch
+// im Ausland greift. Gestellt wird über clock_set_epoch() (UTC), also
+// derselbe Pfad wie der Browser-Sync; im AP-Only-Betrieb bleibt der
+// Browser die Zeitquelle. Kein configTime() → POSIX-TZ bleibt unberührt.
+#define NTP_SERVER                  "pool.ntp.org"
 
 // ── RAM-Ringpuffer (PSRAM) ───────────────────────────────────
 #define LOG_BUFFER_SIZE             86400       // 48h @ 2s = 86400 Einträge

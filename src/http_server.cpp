@@ -1,6 +1,17 @@
 // ============================================================
-//  http_server.cpp — Womo Energy Core v5.5.1
+//  http_server.cpp — Womo Energy Core v5.5.3
 //
+//  v5.5.3: NTP-Sync-Status im Live-JSON (net.ntp = UTC-Epoch des
+//          letzten erfolgreichen NTP-Syncs, 0 = nie) für die
+//          Dashboard-Anzeige im Zeitzone-Tab.
+//  v5.5.2: mDNS (womo.local, AP+STA) + NTP-Zeitsync über STA.
+//          NTP nutzt die rohe esp_sntp-API (IDF 4.4) — KEIN configTime(),
+//          damit der POSIX-TZ des clock-Moduls unangetastet bleibt. Der
+//          SNTP-Callback setzt nur ein Flag; gestellt wird im ws_task
+//          über clock_set_epoch() (UTC) — derselbe Pfad wie der
+//          Browser-Sync, inkl. dessen 5-s-Hysterese. mDNS/NTP werden
+//          per Flag aus on_wifi_event heraus im ws_task ausgelöst
+//          (gleiche Kontext-Regel wie s_wifiReapply).
 //  v5.4.1: Web-OTA (/api/ota GET+POST) — Logik im Modul ota.cpp.
 //  v5.0: 12 Parameter (socDPlusHigh/socGelHigh neu,
 //  socGelOff/pvWRThreshold* entfernt).
@@ -19,6 +30,8 @@
 #include "level.h"
 #include "ota.h"
 #include <WiFi.h>
+#include <ESPmDNS.h>    // v5.5.2: womo.local (Core-Bibliothek, kein lib_dep)
+#include "esp_sntp.h"   // v5.5.2: NTP über rohe SNTP-API (IDF 4.4)
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
@@ -51,6 +64,18 @@ enum StaScanState : uint8_t { STA_IDLE = 0, STA_SCANNING };
 static StaScanState s_staScan     = STA_IDLE;
 static uint32_t     s_staNextScan = 0;      // millis()-Marke für Rescan
 
+// ── mDNS / NTP (v5.5.2) ──────────────────────────────────────
+// on_wifi_event (WiFi-Event-Task) darf kein I2C/keine blockierenden Ops
+// ausführen → es setzt nur s_staGotIp. Auswertung (mDNS-Reannounce +
+// NTP-Start) erfolgt in webserver_broadcast (ws_task, Core 0). Der
+// SNTP-Callback läuft im lwip/SNTP-Task und setzt nur s_ntpSynced; das
+// eigentliche Stellen der Uhr (clock_set_epoch → DS3231/I2C) passiert
+// ebenfalls im ws_task.
+static volatile bool s_staGotIp = false;   // STA-GOT-IP signalisiert
+static volatile bool s_ntpSynced = false;  // SNTP hat frische Zeit geliefert
+static bool          s_sntpInit  = false;  // SNTP genau einmal initialisiert
+static uint32_t      s_ntpLastSync = 0;    // v5.5.3: UTC-Epoch letzter NTP-Sync (0 = nie)
+
 static String slot_key (const char* base, uint8_t i) {
     char k[8]; snprintf(k, sizeof(k), "%s%u", base, (unsigned)(i + 1)); return String(k);
 }
@@ -68,6 +93,9 @@ static void on_wifi_event(WiFiEvent_t event) {
             Serial.printf("[WEB] STA verbunden: %s  (RSSI %d dBm, Kanal %d)\n",
                           WiFi.localIP().toString().c_str(),
                           WiFi.RSSI(), WiFi.channel());
+            // v5.5.2: mDNS-Reannounce + NTP-Start deferred im ws_task,
+            // NICHT hier (Event-Task, kein I2C/Blocking).
+            s_staGotIp = true;
             break;
         case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
             // Normalfall, wenn das WoMo nicht zu Hause steht — AP läuft weiter.
@@ -158,6 +186,45 @@ static void wifi_tick() {
     }
 }
 
+// ── mDNS (v5.5.2) ────────────────────────────────────────────
+// (Neu-)Ankündigung von "<MDNS_HOSTNAME>.local" mit HTTP-Dienst auf dem
+// Webserver-Port. Idempotent: MDNS.end() vor jedem begin(), damit der
+// Name nach einer STA-Verbindung sauber auf beiden Interfaces (AP+STA)
+// neu propagiert wird. Nur aus ws_task/webserver_init aufrufen.
+static void mdns_announce() {
+    MDNS.end();
+    if (MDNS.begin(MDNS_HOSTNAME)) {
+        MDNS.addService("http", "tcp", WEBSERVER_PORT);
+        Serial.printf("[MDNS] http://%s.local aktiv\n", MDNS_HOSTNAME);
+    } else {
+        Serial.println("[MDNS] Start fehlgeschlagen");
+    }
+}
+
+// ── NTP (v5.5.2) ─────────────────────────────────────────────
+// Callback aus dem lwip/SNTP-Task: KEIN I2C, kein clock_set_epoch hier —
+// nur Flag setzen. SNTP hat zu diesem Zeitpunkt die System-UTC-Uhr
+// (settimeofday) bereits gestellt; das Übertragen in die DS3231-geführte
+// Zeitbasis erledigt der ws_task.
+static void ntp_time_cb(struct timeval* /*tv*/) {
+    s_ntpSynced = true;
+}
+
+// SNTP starten (genau einmal) bzw. bei erneuter STA-Verbindung frischen
+// Sync anstoßen. POLL-Modus pollt danach selbstständig periodisch —
+// jeder erfolgreiche Poll feuert ntp_time_cb → Re-Sync ohne eigenen
+// Timer. Nur aus ws_task aufrufen. KEIN configTime() (TZ-Schutz).
+static void ntp_start() {
+    if (s_sntpInit) { sntp_restart(); return; }
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+    sntp_setservername(0, NTP_SERVER);
+    sntp_set_sync_mode(SNTP_SYNC_MODE_IMMED);   // sofort stellen, nicht glätten
+    sntp_set_time_sync_notification_cb(ntp_time_cb);
+    sntp_init();
+    s_sntpInit = true;
+    Serial.printf("[NTP] SNTP gestartet (Server %s)\n", NTP_SERVER);
+}
+
 static void on_ws_event(AsyncWebSocket* s, AsyncWebSocketClient* c,
                         AwsEventType type, void*, uint8_t*, size_t) {
     if (type == WS_EVT_CONNECT || type == WS_EVT_DISCONNECT)
@@ -190,7 +257,8 @@ static String build_live_json() {
        + ",\"sta\":"              + String(staUp?"true":"false")
        + ",\"ssid\":\""           + (staUp?WiFi.SSID():String(""))
        + "\",\"ip\":\""           + (staUp?WiFi.localIP().toString():String(""))
-       + "\",\"rssi\":"           + String(staUp?WiFi.RSSI():0) + "},";
+       + "\",\"rssi\":"           + String(staUp?WiFi.RSSI():0)
+       + ",\"ntp\":"              + String(s_ntpLastSync) + "},";
     j += "\"rtc\":"   + clock_rtc_json() + ",";     
     j += "\"sd\":"    + String(logger_sd_available()?"true":"false") + ",";
     j += "\"buf\":"   + String(g_log_count);
@@ -679,6 +747,8 @@ void webserver_init() {
     WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD, WIFI_AP_CHANNEL, 0, WIFI_AP_MAX_CLIENTS);
     Serial.printf("[WEB] AP: %s  IP: %s\n", WIFI_AP_SSID, WiFi.softAPIP().toString().c_str());
     wifi_apply_sta();                // STA aus NVS starten (falls SSID gesetzt)
+    mdns_announce();                 // v5.5.2: womo.local ab Boot (AP-Modus);
+                                     // Reannounce nach STA-Verbindung im ws_task
 
     ws.onEvent(on_ws_event);
     server.addHandler(&ws);
@@ -734,6 +804,27 @@ void webserver_broadcast() {
         wifi_apply_sta();                 // neue Credentials anwenden (non-blocking)
     }
     wifi_tick();   // v5.5.1: Scan-Auswertung / Rescan-Backoff (Multi-SSID)
+
+    // v5.5.2: STA verbunden → mDNS auf STA-IP neu ankündigen + NTP anstoßen.
+    if (s_staGotIp) {
+        s_staGotIp = false;
+        mdns_announce();
+        ntp_start();
+    }
+    // v5.5.2: SNTP hat frische UTC geliefert → in die DS3231-Zeitbasis
+    // übernehmen. Derselbe Pfad wie der Browser-Sync (/api/time): time()
+    // liefert UTC (TZ-unabhängig), clock_set_epoch() greift mit 5-s-
+    // Hysterese und stellt bei Bedarf DS3231 + NVS.
+    if (s_ntpSynced) {
+        s_ntpSynced = false;
+        time_t utc = time(nullptr);
+        if (utc > 1704067200) {          // Plausibilität (>= 2024-01-01)
+            if (clock_set_epoch((uint32_t)utc)) {
+                s_ntpLastSync = (uint32_t)utc;   // v5.5.3: für Dashboard-Anzeige
+                Serial.printf("[NTP] Zeit gestellt: UTC=%ld\n", (long)utc);
+            }
+        }
+    }
 
     if (ws.count() == 0) return;
     String json = build_live_json();
