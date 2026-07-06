@@ -1,7 +1,9 @@
 // ============================================================
-//  config.h — Womo Energy Core v5.6.0
+//  config.h — Womo Energy Core v5.6.1
 //  Zielplattform: ESP32-S3 DevKitC-1 N16R8
 //
+//  v5.6.1: BLE "buffer"-Kommando (PSRAM-Historie über NUS);
+//          neues Define BLE_BUFFER_MIN_MTU.
 //  v5.6.0: BLE GATT-Server (NUS). Neuer Define-Block "Bluetooth
 //          Low Energy" (Name, MTU, Queue); BLE_PASSKEY → secrets.h.
 //  v5.5.3: NTP-Sync-Status im Dashboard (net.ntp im Live-JSON).
@@ -22,10 +24,10 @@
 
 #pragma once
 
-// ── Firmware-Version (v5.6.0) ────────────────────────────────
+// ── Firmware-Version (v5.6.1) ────────────────────────────────
 // Zentrale Quelle für Boot-Banner (main.cpp) und /api/ota.
 // Bei jedem Release NUR hier ändern (+ Datei-Kopfzeilen).
-#define FW_VERSION "5.6.0"
+#define FW_VERSION "5.6.1"
 
 // ============================================================
 //  BLOCK 1 — HARDWARE-KONSTANTEN
@@ -175,6 +177,10 @@
 #define BLE_PREF_MTU                517          // max. MTU-Angebot (Client handelt)
 #define BLE_RX_LINE_MAX             256          // max. Kommandozeile (Byte)
 #define BLE_RX_QUEUE_LEN            4            // RX-Queue-Tiefe (Zeilen)
+#define BLE_BUFFER_MIN_MTU          100          // "buffer" nur ab dieser MTU
+                                                 // (v5.6.1 — s. P-SW21: schützt
+                                                 // ws_task vor Minuten-Blockade
+                                                 // bei Default-MTU 23)
 
 // ── RAM-Ringpuffer (PSRAM) ───────────────────────────────────
 #define LOG_BUFFER_SIZE             86400       // 48h @ 2s = 86400 Einträge

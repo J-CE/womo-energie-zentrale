@@ -1,5 +1,9 @@
 // ============================================================
-//  ble.cpp — Womo Energy Core v5.6.0
+//  ble.cpp — Womo Energy Core v5.6.1
+//  v5.6.1: {"cmd":"buffer"} — PSRAM-Historie über BLE (Vertrag:
+//  {"type":"buffer","data":[…]} / {"type":"buffer","error":"…"};
+//  Array + Parameter identisch GET /api/buffer, gemeinsamer Builder
+//  webserver_buffer_json). MTU-Guard gegen ws_task-Blockade.
 //  BLE GATT-Server (NUS) — Implementierung, s. ble.h.
 //
 //  NimBLE-Arduino GEPINNT auf 1.4.x: 2.x setzt IDF 5 voraus und
@@ -208,6 +212,40 @@ static void exec_line(const char* line) {
         serializeJson(data, raw);
         bool ok = params_apply_json(raw.c_str());    // gemeinsamer Pfad mit POST /api/params
         resp(cmd, ok, ok ? nullptr : "Wert außerhalb Grenzen");
+        return;
+    }
+    if (!strcmp(cmd, "buffer")) {
+        // v5.6.1: PSRAM-Historie — Vertrag mit der App:
+        //   Erfolg: {"type":"buffer","data":[…]}   (Array identisch /api/buffer)
+        //   Fehler: {"type":"buffer","error":"…"}
+        // Parameter-Semantik/Clamps identisch GET /api/buffer
+        // (offset Default 0, count Default 900 / max 2000, step min 1).
+        // MTU-Guard: bei Default-MTU 23 wären ~120 KB ≈ 6000 Chunks
+        // × 5 ms Pacing ≈ 30+ s Blockade des ws_task → abgelehnt.
+        // Die App verhandelt 517 (requestMtu), real nie ein Problem.
+        uint16_t mtu = s_server ? s_server->getPeerMTU(s_connHandle) : 0;
+        if (mtu < BLE_BUFFER_MIN_MTU) {
+            ble_send_line("{\"type\":\"buffer\",\"error\":\"MTU zu klein\"}");
+            return;
+        }
+        uint32_t offset = doc["offset"] | 0;
+        uint32_t count  = doc["count"]  | 900;
+        uint32_t step   = doc["step"]   | 1;
+        size_t   len    = 0;
+        char* arr = webserver_buffer_json(offset, count, step, &len);   // PSRAM
+        if (!arr) {
+            ble_send_line("{\"type\":\"buffer\",\"error\":\"OOM PSRAM\"}");
+            return;
+        }
+        // Streaming-Versand ohne Umkopieren: Präfix + Array (PSRAM)
+        // + Suffix'\n' als eine '\n'-terminierte Zeile in drei Sends —
+        // das Framing hängt nur am '\n', nicht an Notify-Grenzen.
+        static const char pfx[] = "{\"type\":\"buffer\",\"data\":";
+        bool ok = ble_send_raw(pfx, sizeof(pfx) - 1)
+               && ble_send_raw(arr, len)
+               && ble_send_raw("}\n", 2);
+        free(arr);
+        if (!ok) Serial.println("[BLE] buffer-Versand abgebrochen (Disconnect?)");
         return;
     }
     resp(cmd[0] ? cmd : "?", false, "unbekanntes Kommando");

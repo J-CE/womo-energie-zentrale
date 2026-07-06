@@ -1,5 +1,5 @@
 // ============================================================
-//  ble.h — Womo Energy Core v5.6.0
+//  ble.h — Womo Energy Core v5.6.1
 //  BLE GATT-Server: Nordic UART Service (NUS), NimBLE-Arduino 1.4.x
 //
 //  Protokoll (newline-delimited JSON, beide Richtungen):
@@ -11,6 +11,9 @@
 //      {"cmd":"manual","actuator":"dplus|gel|wr","mode":"auto|on|off"}
 //      {"cmd":"params_get"}                                 → {"type":"params",…}
 //      {"cmd":"params_set","data":{…}}                      → wie POST /api/params
+//      {"cmd":"buffer","offset":…,"count":…,"step":…}       → PSRAM-Historie:
+//         {"type":"buffer","data":[…]} (Array identisch /api/buffer)
+//         bzw. {"type":"buffer","error":"…"} (v5.6.1)
 //    NICHT über BLE: OTA, SD-Streaming, WLAN-Konfig, Zeitzone.
 //
 //  Sicherheit: Bonding + MITM + Secure Connections, fester

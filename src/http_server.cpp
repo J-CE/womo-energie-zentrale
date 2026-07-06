@@ -1,5 +1,7 @@
 // ============================================================
-//  http_server.cpp — Womo Energy Core v5.6.0
+//  http_server.cpp — Womo Energy Core v5.6.1
+//  v5.6.1: webserver_buffer_json() — Ringpuffer-Array-Builder als
+//  gemeinsamer Pfad HTTP+BLE (handle_buffer nutzt ihn jetzt auch).
 //  v5.6.0: BLE-Anbindung — Broadcast an WS+BLE (ein JSON-Build),
 //  ble_tick() im ws_task-Kontext, /api/ble (Schalter), "type":"live".
 //
@@ -564,22 +566,27 @@ static void handle_levelcalib_post(AsyncWebServerRequest* req, uint8_t* data,
               ok?"{\"ok\":true}":"{\"error\":\"Keine gültige Messung zum Kalibrieren\"}");
 }
 
-static void handle_buffer(AsyncWebServerRequest* req) {
-    uint32_t offset = req->hasParam("offset") ? req->getParam("offset")->value().toInt() : 0;
-    uint32_t count  = req->hasParam("count")  ? req->getParam("count") ->value().toInt() : 900;
-    uint32_t step   = req->hasParam("step")   ? req->getParam("step")  ->value().toInt() : 1;
+// v5.6.1: Ringpuffer-Array-Builder — gemeinsamer Pfad für
+// GET /api/buffer (HTTP) und {"cmd":"buffer"} (BLE, s. P-SW21).
+// Baut das JSON-Array in PSRAM; Aufrufer übernimmt den Puffer
+// (free() bzw. send_psram_json via shared_ptr). Zeilenformat und
+// Clamps (count<=2000, step>=1) unverändert aus v5.4/H-3/F-18.
+// Rückgabe nullptr bei PSRAM-OOM.
+char* webserver_buffer_json(uint32_t offset, uint32_t count,
+                            uint32_t step, size_t* outLen) {
+    *outLen = 0;
     if (count > 2000) count = 2000;
     if (step  < 1)    step  = 1;
 
     LogEntry* entries = (LogEntry*)ps_malloc(count * sizeof(LogEntry));
-    if (!entries) { req->send(503,"application/json","{\"error\":\"OOM PSRAM\"}"); return; }
+    if (!entries) return nullptr;
     uint32_t n = logger_snapshot(offset, count, step, entries);
 
     // H-3: JSON komplett in PSRAM aufbauen (nicht in den Internal-RAM-Stream),
     // danach chunked streamen. ~240 B/Eintrag reichlich bemessen.
     size_t cap = (size_t)n * 240 + 16;
     char*  out = (char*)ps_malloc(cap);
-    if (!out) { free(entries); req->send(503,"application/json","{\"error\":\"OOM PSRAM\"}"); return; }
+    if (!out) { free(entries); return nullptr; }
 
     size_t off = 0;
     out[off++] = '[';
@@ -611,8 +618,19 @@ static void handle_buffer(AsyncWebServerRequest* req) {
     }
     free(entries);
     if (off + 2 <= cap) out[off++] = ']';
-    // Chunked aus PSRAM streamen; send_psram_json übernimmt free(out) via shared_ptr.
-    send_psram_json(req, out, off);
+    *outLen = off;
+    return out;
+}
+
+static void handle_buffer(AsyncWebServerRequest* req) {
+    uint32_t offset = req->hasParam("offset") ? req->getParam("offset")->value().toInt() : 0;
+    uint32_t count  = req->hasParam("count")  ? req->getParam("count") ->value().toInt() : 900;
+    uint32_t step   = req->hasParam("step")   ? req->getParam("step")  ->value().toInt() : 1;
+    size_t len = 0;
+    char* out = webserver_buffer_json(offset, count, step, &len);   // v5.6.1: gemeinsamer Builder
+    // Chunked aus PSRAM streamen; send_psram_json übernimmt free(out) via
+    // shared_ptr und deckt auch out==nullptr (OOM → 503) ab.
+    send_psram_json(req, out, len);
 }
 
 static void handle_sdfiles(AsyncWebServerRequest* req) {

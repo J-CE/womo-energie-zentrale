@@ -1,5 +1,5 @@
 // ============================================================
-//  http_server.h — Womo Energy Core v5.6.0
+//  http_server.h — Womo Energy Core v5.6.1
 //  AsyncWebServer-Interface: REST-API + WebSocket-Broadcast
 //
 //  Endpunkte:
@@ -35,3 +35,9 @@ void webserver_broadcast();
 // v5.6.0: Live-JSON (identisch zum WS-Broadcast, inkl. "type":"live")
 // für andere Module — konkret BLE {"cmd":"live"} (ble.cpp).
 String webserver_live_json();
+
+// v5.6.1: Ringpuffer als JSON-Array (Format/Clamps identisch
+// GET /api/buffer) in PSRAM — Aufrufer übernimmt den Puffer
+// (free()). nullptr bei OOM. Genutzt von HTTP und BLE "buffer".
+char* webserver_buffer_json(uint32_t offset, uint32_t count,
+                            uint32_t step, size_t* outLen);

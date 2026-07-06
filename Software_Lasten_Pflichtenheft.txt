@@ -1,6 +1,6 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║     LASTEN- UND PFLICHTENHEFT — SOFTWARE                        ║
-║     Womo Energy Core v5.6.0                                      ║
+║     Womo Energy Core v5.6.1                                      ║
 ║     Stand: Schaltkriterien-Redesign (nur harte AUS-Bedingungen, ║
 ║            Float-Erkennung, WR nur manuell EIN) + D+-Pegel-Fix  ║
 ║            (Active-HIGH) + Lagesensor Überkopf-Einbau/Fehler-   ║
@@ -9,6 +9,7 @@
 ║            + mDNS (womo.local) + NTP-Zeitsync (v5.5.2)          ║
 ║            + NTP-Sync-Statusanzeige im Dashboard (v5.5.3)       ║
 ║            + BLE GATT-Server NUS mit Passkey-Pairing (v5.6.0)   ║
+║            + BLE-Historie: "buffer"-Kommando (v5.6.1)           ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -365,7 +366,7 @@ L-SW23 | MANUELLER AKTOR-OVERRIDE  [NEU v5.4, GEÄNDERT v5.5] [SOLLTE]
   Anzeige: Reason-String je Aktor ("MANUAL EIN (Auto in Ns)",
     "MANUAL AUS (dauerhaft)", …) + aktiver Segmentbutton.
 
-L-SW24 | BLUETOOTH-SCHNITTSTELLE (BLE)  [NEU v5.6.0]        [SOLLTE]
+L-SW24 | BLUETOOTH-SCHNITTSTELLE (BLE) [NEU v5.6.0, GEÄND. v5.6.1] [SOLLTE]
   Das System stellt zusätzlich zum WLAN eine BLE-Schnittstelle für
   eine Begleit-App bereit (GATT-Server "WomoEnergy", Nordic UART
   Service). Über BLE werden geliefert bzw. angenommen:
@@ -374,8 +375,9 @@ L-SW24 | BLUETOOTH-SCHNITTSTELLE (BLE)  [NEU v5.6.0]        [SOLLTE]
       liches Feld "type":"live" zur Frame-Unterscheidung.
     RX (← App): Kommandos als newline-terminiertes JSON:
       Sofort-Push, manueller Aktor-Override (Semantik identisch
-      L-SW23), Parameter lesen/schreiben (Grenzen identisch P-SW14).
-  NICHT über BLE verfügbar (bewusst): OTA, SD-/Verlaufsdaten,
+      L-SW23), Parameter lesen/schreiben (Grenzen identisch P-SW14),
+      PSRAM-Historie (v5.6.1: "buffer", identisch /api/buffer).
+  NICHT über BLE verfügbar (bewusst): OTA, SD-Verlaufsdaten,
     WLAN-Konfiguration, Zeitzone — dafür bleibt das WLAN zuständig.
   Sicherheit: Pairing zwingend (Bonding + MITM + Secure Connections)
     mit festem 6-stelligem Passkey (secrets.h). Ohne authentifizierte
@@ -1082,7 +1084,7 @@ P-SW20 | WEB-OTA (ota.h/.cpp)  [NEU v5.4.1]
     littlefs.bin via `pio run -t buildfs` (jeweils unter
     .pio/build/esp32-s3-devkitc-1/).
 
-P-SW21 | BLE GATT-SERVER (ble.h/.cpp)  [NEU v5.6.0]
+P-SW21 | BLE GATT-SERVER (ble.h/.cpp)  [NEU v5.6.0, GEÄNDERT v5.6.1]
   Bibliothek: NimBLE-Arduino, GEPINNT auf 1.4.x (^1.4.3 in
     platformio.ini). Version 2.x setzt IDF 5 voraus und kollidiert
     mit Arduino-Core 2.x / IDF 4.4 — NICHT anheben, solange
@@ -1119,6 +1121,28 @@ P-SW21 | BLE GATT-SERVER (ble.h/.cpp)  [NEU v5.6.0]
     {"cmd":"params_set","data":{…}} → params_apply_json() —
                             gemeinsamer Validierungspfad mit
                             POST /api/params (v5.6.0, params.cpp)
+    {"cmd":"buffer","offset":…,"count":…,"step":…}  (v5.6.1)
+                          → PSRAM-Historie. Vertrag mit der App:
+                            Erfolg {"type":"buffer","data":[…]} —
+                            Array + Parameter-Semantik/Clamps
+                            IDENTISCH GET /api/buffer (offset Def. 0,
+                            count Def. 900 / max 2000, step min 1);
+                            Fehler {"type":"buffer","error":"…"}
+                            ("MTU zu klein" | "OOM PSRAM").
+                            Gemeinsamer Builder webserver_buffer_json()
+                            (v5.6.1, http_server.cpp — handle_buffer
+                            nutzt denselben; Array in PSRAM, Aufrufer
+                            gibt frei). Versand ohne Umkopieren:
+                            Präfix + PSRAM-Array + "}\n" als DREI
+                            ble_send_raw-Aufrufe — das Framing hängt
+                            am '\n', nicht an Notify-Grenzen.
+                            MTU-Guard BLE_BUFFER_MIN_MTU (100): bei
+                            Default-MTU 23 wären ~120 KB ≈ 6000
+                            Chunks × 5 ms ≈ 30+ s ws_task-Blockade —
+                            abgelehnt; die App verhandelt MTU 517
+                            (~240 Chunks ≈ 1,2 s, Live-Tick pausiert
+                            währenddessen, unkritisch bei 60-s-
+                            Graph-Refresh der App).
     Antworten: {"type":"resp","cmd":"…","ok":…[,"err":"…"]}
   Kontext-Disziplin (analog AsyncTCP-Regeln):
     NimBLE-Callbacks (Host-Task) verarbeiten NICHTS: onWrite füttert
@@ -1146,6 +1170,25 @@ P-SW21 | BLE GATT-SERVER (ble.h/.cpp)  [NEU v5.6.0]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ÄNDERUNGSPROTOKOLL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+─── v5.6.0 → v5.6.1 ─────────────────────────────────────────────
+
+  BLE-HISTORIE:
+  • Neues Kommando {"cmd":"buffer","offset","count","step"} —
+    PSRAM-Ringpuffer über BLE NUS. Antwortvertrag (mit App v1.0.0
+    abgestimmt): {"type":"buffer","data":[…]} bzw.
+    {"type":"buffer","error":"…"}. Array, Parameter-Semantik und
+    Clamps identisch GET /api/buffer. [L-SW24, P-SW21]
+  • webserver_buffer_json() NEU (http_server.h/.cpp): Array-Builder
+    aus handle_buffer extrahiert — gemeinsamer Pfad HTTP+BLE
+    (gleiche Disziplin wie params_apply_json in v5.6.0); /api/buffer
+    extern unverändert. [P-SW12, P-SW21]
+  • MTU-Guard BLE_BUFFER_MIN_MTU=100 (NEU config.h): buffer-Abruf
+    unter dieser MTU abgelehnt (Schutz vor ws_task-Blockade bei
+    Default-MTU 23). [P-SW21]
+  • Antwortframe-Format: KEINE Änderung — die App korreliert seit
+    v1.0.0 über type/cmd (Abgleich-Ergebnis; das ursprünglich
+    app-seitig erwartete id-Echo entfällt beidseitig).
 
 ─── v5.5.3 → v5.6.0 ─────────────────────────────────────────────
 
