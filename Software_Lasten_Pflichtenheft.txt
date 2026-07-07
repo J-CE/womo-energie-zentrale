@@ -1,6 +1,6 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║     LASTEN- UND PFLICHTENHEFT — SOFTWARE                        ║
-║     Womo Energy Core v5.6.1                                      ║
+║     Womo Energy Core v5.6.2                                      ║
 ║     Stand: Schaltkriterien-Redesign (nur harte AUS-Bedingungen, ║
 ║            Float-Erkennung, WR nur manuell EIN) + D+-Pegel-Fix  ║
 ║            (Active-HIGH) + Lagesensor Überkopf-Einbau/Fehler-   ║
@@ -1111,6 +1111,18 @@ P-SW21 | BLE GATT-SERVER (ble.h/.cpp)  [NEU v5.6.0, GEÄNDERT v5.6.1]
     ~70 Chunks, mit 5 ms Pacing ≈ 350 ms, unkritisch im 2-s-Tick).
     NimBLE 1.4.x: notify() liefert void — kein Congestion-Feedback,
     daher festes Pacing statt Retry.
+    v5.6.2 BUGFIX: Versand über die Direkt-Überladung notify(data,len)
+    (mbuf direkt aus den Nutzdaten) statt setValue()+notify(). Der
+    Attributwert-Store hinter setValue() hat ohne explizites max_len
+    das ATT-Limit BLE_ATT_ATTR_MAX_LEN = 512 B; NimBLEAttValue::
+    setValue() verwirft größere Werte STILL (Log "value exceeds max",
+    return false — von NimBLECharacteristic::setValue [void] ver-
+    schluckt), notify() sendete dann den stehengebliebenen alten
+    Attributwert. Bei MTU 517 (Chunk 514 B) waren dadurch alle vollen
+    Chunks der Live-/Buffer-Frames korrupt; nur Ein-Chunk-Frames
+    (resp/params ≤ 512 B) funktionierten. Der Direkt-Versand umgeht
+    den Store vollständig — keine Stale-Data-Mechanik mehr im Pfad;
+    Grenze ist allein die Peer-MTU, die das Chunking einhält.
   Kommandos (RX → Ausführung in ble_tick):
     {"cmd":"live"}        → Sofort-Push des Live-JSON (Flag, gesendet
                             nach Queue-Drain im selben Tick)
@@ -1170,6 +1182,23 @@ P-SW21 | BLE GATT-SERVER (ble.h/.cpp)  [NEU v5.6.0, GEÄNDERT v5.6.1]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ÄNDERUNGSPROTOKOLL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+─── v5.6.1 → v5.6.2 ─────────────────────────────────────────────
+
+  BLE-TX-BUGFIX (Symptom: System-Tab leer, Live-Graph nicht ladbar,
+  Params/Einstellungen funktionierten):
+  • ble_send_raw: Direkt-Notify notify(data,len) statt
+    setValue()+notify(). setValue() lief über den Attributwert-Store
+    (Default-Limit BLE_ATT_ATTR_MAX_LEN = 512 B) und verwarf Chunks
+    >512 B still — notify() verschickte stale Daten. Bei MTU 517
+    (Chunk = 514 B) korrumpierte das jeden mehrchunkigen Frame
+    (live, buffer); Ein-Chunk-Frames (resp, params) blieben intakt,
+    was das Symptombild exakt erklärt. Befund gegen die gepinnte
+    NimBLE-1.4.3-Quelle verifiziert (NimBLEAttValue.h Z. 380 ff.,
+    NimBLECharacteristic.cpp Z. 443 ff.). [P-SW21]
+  • Kein API-/Vertragsänderung; App v1.0.3 unverändert kompatibel.
+    Android 14+ verhandelt stets MTU 517 (requestMtu-Wunschwert
+    wird ignoriert) — app-seitig nicht umgehbar gewesen.
 
 ─── v5.6.0 → v5.6.1 ─────────────────────────────────────────────
 

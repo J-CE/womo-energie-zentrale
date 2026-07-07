@@ -1,5 +1,9 @@
 // ============================================================
-//  ble.cpp — Womo Energy Core v5.6.1
+//  ble.cpp — Womo Energy Core v5.6.2
+//  v5.6.2 BUGFIX: TX-Chunks >512 B wurden still verworfen (Attribut-
+//  wert-Store, BLE_ATT_ATTR_MAX_LEN) — notify() sendete stale Daten;
+//  Live-/Buffer-Frames bei MTU 517 korrupt. Fix: Direkt-Notify-
+//  Überladung notify(data,len) umgeht den Store (s. ble_send_raw).
 //  v5.6.1: {"cmd":"buffer"} — PSRAM-Historie über BLE (Vertrag:
 //  {"type":"buffer","data":[…]} / {"type":"buffer","error":"…"};
 //  Array + Parameter identisch GET /api/buffer, gemeinsamer Builder
@@ -143,8 +147,19 @@ static bool ble_send_raw(const char* data, size_t len) {
         if (!s_subscribed) return false;             // Disconnect während Send
         size_t take = len - off;
         if (take > chunk) take = chunk;
-        s_txChar->setValue((const uint8_t*)(data + off), take);
-        s_txChar->notify();
+        // v5.6.2 BUGFIX: notify(data,len) DIREKT statt setValue()+notify().
+        // setValue() läuft über den Attributwert-Store, der ohne explizites
+        // max_len mit BLE_ATT_ATTR_MAX_LEN = 512 B angelegt wird —
+        // NimBLEAttValue::setValue() verwirft >512 B still ("value exceeds
+        // max") und notify() verschickte dann den STEHENGEBLIEBENEN alten
+        // Wert. Bei MTU 517 war chunk = 514 > 512 → jeder volle Chunk der
+        // Live-/Buffer-Frames korrupt (nur der kurze Schlusschunk kam an).
+        // Die notify(data,len)-Überladung (1.4.3, NimBLECharacteristic.cpp
+        // Z. 443) baut den mbuf direkt aus den Daten und umgeht den Store
+        // samt 512-B-Limit vollständig — kein Stale-Data-Mechanismus mehr
+        // im Pfad. Einzige Grenze ist die Peer-MTU, die unser Chunking
+        // (mtu − 3) bereits einhält.
+        s_txChar->notify((const uint8_t*)(data + off), take);
         off += take;
         if (off < len) vTaskDelay(pdMS_TO_TICKS(5)); // Pacing (kleine MTU)
     }

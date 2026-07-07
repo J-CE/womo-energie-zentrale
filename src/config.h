@@ -1,7 +1,9 @@
 // ============================================================
-//  config.h — Womo Energy Core v5.6.1
+//  config.h — Womo Energy Core v5.6.2
 //  Zielplattform: ESP32-S3 DevKitC-1 N16R8
 //
+//  v5.6.2: BLE-TX-Bugfix — Direkt-Notify statt Attributwert-Store
+//          (512-B-Limit korrumpierte Live-/Buffer-Frames bei MTU 517).
 //  v5.6.1: BLE "buffer"-Kommando (PSRAM-Historie über NUS);
 //          neues Define BLE_BUFFER_MIN_MTU.
 //  v5.6.0: BLE GATT-Server (NUS). Neuer Define-Block "Bluetooth
@@ -24,10 +26,10 @@
 
 #pragma once
 
-// ── Firmware-Version (v5.6.1) ────────────────────────────────
+// ── Firmware-Version (v5.6.2) ────────────────────────────────
 // Zentrale Quelle für Boot-Banner (main.cpp) und /api/ota.
 // Bei jedem Release NUR hier ändern (+ Datei-Kopfzeilen).
-#define FW_VERSION "5.6.1"
+#define FW_VERSION "5.6.2"
 
 // ============================================================
 //  BLOCK 1 — HARDWARE-KONSTANTEN
