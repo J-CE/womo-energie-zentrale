@@ -1,5 +1,22 @@
 // ============================================================
-//  ble.cpp — Womo Energy Core v5.6.2
+//  ble.cpp — Womo Energy Core v5.6.3
+//  v5.6.3 BUGFIX: NimBLECharacteristic::notify() (void) verschluckte
+//  JEDEN Sendefehler. Verifiziert in 1.4.3: bei msys-Pool-Erschöpfung
+//  (Default 12 × 292 B — unser Chunk-Burst hält Pakete bis zum
+//  nächsten Connection-Event im Host) liefert ble_hs_mbuf_from_flat()
+//  NULL; notify() reicht das NULL ungeprüft an ble_gatts_notify_custom
+//  weiter, und NULL heißt dort "lies den Attributwert-Store und sende
+//  DEN" (ble_gattc.c Z. 4172ff.) → leerer/stehengebliebener Frame
+//  mitten in der Zeile. Zusätzlich verwarfen ENOMEM-Fälle tiefer im
+//  Stack (ble_att_cmd_get/ble_att_tx) Chunks still. Beides zerstörte
+//  die '\n'-Assemblierung deterministisch bei Mehrchunk-Frames
+//  (Live/Buffer); Ein-Chunk-Frames (resp/params) blieben unauffällig.
+//  Fix: ble_notify_chunk() — mbuf selbst allozieren, rc auswerten,
+//  bei ENOMEM/EAGAIN mit Backoff wiederholen; bei Abbruch '\n' als
+//  Framing-Reset. Flankierend msys-Pool → 30 Blöcke (platformio.ini).
+//  v5.6.3 NEU: {"cmd":"level"} → {"type":"level","data":{…}} —
+//  Lagesensor-Zustand für den Lage-Tab der App (identisch /api/level;
+//  Konfiguration/Kalibrierung bleibt bewusst WLAN-only, L-SW24).
 //  v5.6.2 BUGFIX: TX-Chunks >512 B wurden still verworfen (Attribut-
 //  wert-Store, BLE_ATT_ATTR_MAX_LEN) — notify() sendete stale Daten;
 //  Live-/Buffer-Frames bei MTU 517 korrupt. Fix: Direkt-Notify-
@@ -29,6 +46,7 @@
 #include "params.h"
 #include "logic.h"
 #include "http_server.h"   // webserver_live_json()
+#include "level.h"         // v5.6.3: level_to_json() für {"cmd":"level"}
 #include <Preferences.h>
 #include <ArduinoJson.h>
 #include <NimBLEDevice.h>
@@ -132,11 +150,49 @@ class WomoRxCallbacks : public NimBLECharacteristicCallbacks {
 };
 
 // ── Senden (ausschließlich ws_task-Kontext) ───────────────────
-// Fragmentiert in Chunks von (Peer-MTU − 3) Byte. NimBLE 1.4.x:
-// notify() liefert void (kein Congestion-Feedback) — daher festes
-// Pacing zwischen Chunks; die NimBLE-interne Queue puffert. Bei
-// MTU 517 sind es ~3 Chunks je Live-Frame, bei MTU 23 ~70 → mit
-// 5 ms Pacing ≈ 350 ms, unkritisch im 2-s-Tick des ws_task.
+// Fragmentiert in Chunks von (Peer-MTU − 3) Byte, newline-Framing.
+//
+// v5.6.3: rc-GEPRÜFTER Direktversand über die NimBLE-Host-API statt
+// NimBLECharacteristic::notify(). notify() ist void und verschluckt
+// in 1.4.3 zwei Fehlerpfade STILL (im Quellcode verifiziert):
+//  1) ble_hs_mbuf_from_flat() → NULL bei msys-Pool-Erschöpfung
+//     (Default 12 × 292 B ≈ 3,5 KB; ein Live-Frame-Burst von 3–4
+//     Chunks à 514 B belegt ~2 Blöcke je Chunk, und die Pakete
+//     bleiben bis zum nächsten Connection-Event von 30–50 ms im
+//     Host gepuffert).
+//  2) notify() reicht NULL ungeprüft an ble_gatts_notify_custom()
+//     weiter — NULL bedeutet dort "Attributwert-Store lesen und
+//     senden" (ble_gattc.c Z. 4172ff.): ein leerer/stehengebliebener
+//     Frame wird MITTEN in die Zeile injiziert. Weitere ENOMEM tiefer
+//     im Stack (ble_att_cmd_get/ble_att_tx) verwerfen Chunks still.
+// Folge: '\n'-Assemblierung bei Mehrchunk-Frames (Live/Buffer)
+// deterministisch zerstört; Ein-Chunk-Frames (resp/params ≤ 512 B)
+// unauffällig — exakt das Fehlerbild "nur Einstellungen-Tab geht".
+//
+// ble_notify_chunk(): mbuf selbst allozieren (NIE NULL weiterreichen),
+// rc auswerten, bei ENOMEM/EAGAIN mit Backoff wiederholen — der Pool
+// leert sich mit jedem Connection-Event. Diagnose über Retry-/Fail-
+// Zähler im Serial-Log: steht dort "alle Chunks rc=0", ist der
+// Firmware-TX-Pfad beweisbar sauber.
+static uint32_t s_txRetries = 0;   // kumulierte Wiederholungen (Diagnose)
+static uint32_t s_txFails   = 0;   // abgebrochene Frames (Diagnose)
+
+static int ble_notify_chunk(const uint8_t* p, size_t n) {
+    const uint16_t handle = s_txChar->getHandle();
+    for (int attempt = 0; attempt < BLE_TX_RETRY_MAX; attempt++) {
+        if (!s_subscribed) return BLE_HS_ENOTCONN;   // Disconnect → sofort raus
+        os_mbuf* om = ble_hs_mbuf_from_flat(p, n);
+        int rc = om ? ble_gatts_notify_custom(s_connHandle, handle, om)
+                    : BLE_HS_ENOMEM;                 // NIE NULL weiterreichen!
+        if (rc == 0) return 0;
+        if (rc != BLE_HS_ENOMEM && rc != BLE_HS_EAGAIN)
+            return rc;                               // harter Fehler → Abbruch
+        s_txRetries++;
+        vTaskDelay(pdMS_TO_TICKS(BLE_TX_RETRY_DELAY_MS));
+    }
+    return BLE_HS_ETIMEOUT;                          // Retries erschöpft
+}
+
 static bool ble_send_raw(const char* data, size_t len) {
     if (!s_active || !s_subscribed || !s_txChar || !s_server) return false;
     uint16_t mtu = s_server->getPeerMTU(s_connHandle);
@@ -144,22 +200,22 @@ static bool ble_send_raw(const char* data, size_t len) {
     const size_t chunk = (size_t)mtu - 3;
     size_t off = 0;
     while (off < len) {
-        if (!s_subscribed) return false;             // Disconnect während Send
         size_t take = len - off;
         if (take > chunk) take = chunk;
-        // v5.6.2 BUGFIX: notify(data,len) DIREKT statt setValue()+notify().
-        // setValue() läuft über den Attributwert-Store, der ohne explizites
-        // max_len mit BLE_ATT_ATTR_MAX_LEN = 512 B angelegt wird —
-        // NimBLEAttValue::setValue() verwirft >512 B still ("value exceeds
-        // max") und notify() verschickte dann den STEHENGEBLIEBENEN alten
-        // Wert. Bei MTU 517 war chunk = 514 > 512 → jeder volle Chunk der
-        // Live-/Buffer-Frames korrupt (nur der kurze Schlusschunk kam an).
-        // Die notify(data,len)-Überladung (1.4.3, NimBLECharacteristic.cpp
-        // Z. 443) baut den mbuf direkt aus den Daten und umgeht den Store
-        // samt 512-B-Limit vollständig — kein Stale-Data-Mechanismus mehr
-        // im Pfad. Einzige Grenze ist die Peer-MTU, die unser Chunking
-        // (mtu − 3) bereits einhält.
-        s_txChar->notify((const uint8_t*)(data + off), take);
+        int rc = ble_notify_chunk((const uint8_t*)(data + off), take);
+        if (rc != 0) {
+            s_txFails++;
+            Serial.printf("[BLE] TX-Abbruch rc=%d @ %u/%u B "
+                          "(Frames verworfen: %lu, Retries ges.: %lu)\n",
+                          rc, (unsigned)off, (unsigned)len,
+                          (unsigned long)s_txFails, (unsigned long)s_txRetries);
+            // Framing-Reset (Best-Effort): einzelnes '\n', damit die App
+            // die halbe Zeile verwirft, statt sie mit dem nächsten Frame
+            // zu verketten. rc bewusst ignoriert — mehr geht hier nicht.
+            static const uint8_t nl = '\n';
+            ble_notify_chunk(&nl, 1);
+            return false;
+        }
         off += take;
         if (off < len) vTaskDelay(pdMS_TO_TICKS(5)); // Pacing (kleine MTU)
     }
@@ -227,6 +283,18 @@ static void exec_line(const char* line) {
         serializeJson(data, raw);
         bool ok = params_apply_json(raw.c_str());    // gemeinsamer Pfad mit POST /api/params
         resp(cmd, ok, ok ? nullptr : "Wert außerhalb Grenzen");
+        return;
+    }
+    if (!strcmp(cmd, "level")) {
+        // v5.6.3: Lagesensor-Zustand für den Lage-Tab der App.
+        // Antwort-Objekt identisch GET /api/level (~280 B = 1 Chunk);
+        // level_to_json() ist bereits cross-task-sicher (AsyncTCP-
+        // Handler nutzt denselben Pfad). Konfiguration/Kalibrierung
+        // bleibt bewusst WLAN-only (L-SW24).
+        String p = "{\"type\":\"level\",\"data\":";
+        p += level_to_json();
+        p += "}";
+        ble_send_line(p);
         return;
     }
     if (!strcmp(cmd, "buffer")) {

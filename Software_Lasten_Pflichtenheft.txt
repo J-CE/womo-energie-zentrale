@@ -1,6 +1,6 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║     LASTEN- UND PFLICHTENHEFT — SOFTWARE                        ║
-║     Womo Energy Core v5.6.2                                      ║
+║     Womo Energy Core v5.6.3                                      ║
 ║     Stand: Schaltkriterien-Redesign (nur harte AUS-Bedingungen, ║
 ║            Float-Erkennung, WR nur manuell EIN) + D+-Pegel-Fix  ║
 ║            (Active-HIGH) + Lagesensor Überkopf-Einbau/Fehler-   ║
@@ -10,6 +10,7 @@
 ║            + NTP-Sync-Statusanzeige im Dashboard (v5.5.3)       ║
 ║            + BLE GATT-Server NUS mit Passkey-Pairing (v5.6.0)   ║
 ║            + BLE-Historie: "buffer"-Kommando (v5.6.1)           ║
+║            + BLE-TX rc-geprüft + "level"-Kommando (v5.6.3)      ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -366,7 +367,7 @@ L-SW23 | MANUELLER AKTOR-OVERRIDE  [NEU v5.4, GEÄNDERT v5.5] [SOLLTE]
   Anzeige: Reason-String je Aktor ("MANUAL EIN (Auto in Ns)",
     "MANUAL AUS (dauerhaft)", …) + aktiver Segmentbutton.
 
-L-SW24 | BLUETOOTH-SCHNITTSTELLE (BLE) [NEU v5.6.0, GEÄND. v5.6.1] [SOLLTE]
+L-SW24 | BLUETOOTH-SCHNITTSTELLE (BLE) [NEU v5.6.0, GEÄND. v5.6.3] [SOLLTE]
   Das System stellt zusätzlich zum WLAN eine BLE-Schnittstelle für
   eine Begleit-App bereit (GATT-Server "WomoEnergy", Nordic UART
   Service). Über BLE werden geliefert bzw. angenommen:
@@ -376,7 +377,9 @@ L-SW24 | BLUETOOTH-SCHNITTSTELLE (BLE) [NEU v5.6.0, GEÄND. v5.6.1] [SOLLTE]
     RX (← App): Kommandos als newline-terminiertes JSON:
       Sofort-Push, manueller Aktor-Override (Semantik identisch
       L-SW23), Parameter lesen/schreiben (Grenzen identisch P-SW14),
-      PSRAM-Historie (v5.6.1: "buffer", identisch /api/buffer).
+      PSRAM-Historie (v5.6.1: "buffer", identisch /api/buffer),
+      Lagesensor-Zustand (v5.6.3: "level", identisch /api/level —
+      nur Anzeige; Lage-Konfiguration/Kalibrierung bleibt WLAN-only).
   NICHT über BLE verfügbar (bewusst): OTA, SD-Verlaufsdaten,
     WLAN-Konfiguration, Zeitzone — dafür bleibt das WLAN zuständig.
   Sicherheit: Pairing zwingend (Bonding + MITM + Secure Connections)
@@ -1084,7 +1087,7 @@ P-SW20 | WEB-OTA (ota.h/.cpp)  [NEU v5.4.1]
     littlefs.bin via `pio run -t buildfs` (jeweils unter
     .pio/build/esp32-s3-devkitc-1/).
 
-P-SW21 | BLE GATT-SERVER (ble.h/.cpp)  [NEU v5.6.0, GEÄNDERT v5.6.1]
+P-SW21 | BLE GATT-SERVER (ble.h/.cpp)  [NEU v5.6.0, GEÄNDERT v5.6.3]
   Bibliothek: NimBLE-Arduino, GEPINNT auf 1.4.x (^1.4.3 in
     platformio.ini). Version 2.x setzt IDF 5 voraus und kollidiert
     mit Arduino-Core 2.x / IDF 4.4 — NICHT anheben, solange
@@ -1109,8 +1112,30 @@ P-SW21 | BLE GATT-SERVER (ble.h/.cpp)  [NEU v5.6.0, GEÄNDERT v5.6.1]
     setMTU(517) als Angebot, der Client handelt (Android:
     requestMtu(517) → ~3 Chunks je Live-Frame; Default-MTU 23 →
     ~70 Chunks, mit 5 ms Pacing ≈ 350 ms, unkritisch im 2-s-Tick).
-    NimBLE 1.4.x: notify() liefert void — kein Congestion-Feedback,
-    daher festes Pacing statt Retry.
+    v5.6.3 BUGFIX: Versand rc-GEPRÜFT über die Raw-Host-API
+    (ble_hs_mbuf_from_flat + ble_gatts_notify_custom) statt über
+    NimBLECharacteristic::notify(). notify() ist void und verschluckt
+    in 1.4.3 zwei Fehlerpfade still (im Quellcode verifiziert):
+    (1) msys-Pool-Erschöpfung (Default 12 × 292 B ≈ 3,5 KB) →
+    ble_hs_mbuf_from_flat() liefert NULL; (2) notify() reicht NULL
+    ungeprüft an ble_gatts_notify_custom() weiter, wo NULL "lies den
+    Attributwert-Store und sende DEN" bedeutet (ble_gattc.c
+    Z. 4172ff.) → leerer/stehengebliebener Frame MITTEN in der Zeile;
+    weitere ENOMEM tiefer im Stack verwerfen Chunks still. Der Live-
+    Frame-Burst (3–4 Chunks à 514 B, ~2 msys-Blöcke je Chunk, gepuffert
+    bis zum nächsten Connection-Event von 30–50 ms) erschöpfte den
+    Pool → '\n'-Assemblierung bei Mehrchunk-Frames (Live/Buffer)
+    deterministisch zerstört, Ein-Chunk-Frames (resp/params ≤ 512 B)
+    unauffällig. Fix ble_notify_chunk(): mbuf selbst allozieren (nie
+    NULL weiterreichen), rc auswerten, bei ENOMEM/EAGAIN Backoff-Retry
+    (BLE_TX_RETRY_MAX=40 × BLE_TX_RETRY_DELAY_MS=10 ms, config.h) —
+    der Pool leert sich je Connection-Event; Disconnect bricht sofort
+    ab. Bei Abbruch: einzelnes '\n' als Framing-Reset (App verwirft
+    die halbe Zeile) + Serial-Log mit rc/Zählern (Diagnose: "alle
+    Chunks rc=0" ⇒ Firmware-TX beweisbar sauber). Flankierend msys-
+    Pool per Build-Flag -DCONFIG_BT_NIMBLE_MSYS1_BLOCK_COUNT=30
+    (platformio.ini, ~8,8 KB internes RAM; nimconfig.h übernimmt per
+    #ifndef). Das feste 5-ms-Pacing zwischen Chunks bleibt.
     v5.6.2 BUGFIX: Versand über die Direkt-Überladung notify(data,len)
     (mbuf direkt aus den Nutzdaten) statt setValue()+notify(). Der
     Attributwert-Store hinter setValue() hat ohne explizites max_len
@@ -1155,6 +1180,12 @@ P-SW21 | BLE GATT-SERVER (ble.h/.cpp)  [NEU v5.6.0, GEÄNDERT v5.6.1]
                             (~240 Chunks ≈ 1,2 s, Live-Tick pausiert
                             währenddessen, unkritisch bei 60-s-
                             Graph-Refresh der App).
+    {"cmd":"level"}       → {"type":"level","data":{…}}  (v5.6.3)
+                            Lagesensor-Zustand, Objekt identisch
+                            GET /api/level (~280 B = 1 Chunk); für
+                            den Lage-Tab der App (Poll bei aktivem
+                            Tab). Lage-Konfiguration/Kalibrierung
+                            bewusst NICHT über BLE (L-SW24).
     Antworten: {"type":"resp","cmd":"…","ok":…[,"err":"…"]}
   Kontext-Disziplin (analog AsyncTCP-Regeln):
     NimBLE-Callbacks (Host-Task) verarbeiten NICHTS: onWrite füttert

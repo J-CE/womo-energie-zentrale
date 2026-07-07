@@ -1,7 +1,10 @@
 // ============================================================
-//  config.h — Womo Energy Core v5.6.2
+//  config.h — Womo Energy Core v5.6.3
 //  Zielplattform: ESP32-S3 DevKitC-1 N16R8
 //
+//  v5.6.3: BLE-TX rc-geprüft (Raw-Host-API statt notify()-void) —
+//          neue Defines BLE_TX_RETRY_MAX/_DELAY_MS; "level"-Kommando
+//          (Lage-Tab der App); msys-Pool 30 Blöcke (platformio.ini).
 //  v5.6.2: BLE-TX-Bugfix — Direkt-Notify statt Attributwert-Store
 //          (512-B-Limit korrumpierte Live-/Buffer-Frames bei MTU 517).
 //  v5.6.1: BLE "buffer"-Kommando (PSRAM-Historie über NUS);
@@ -26,10 +29,10 @@
 
 #pragma once
 
-// ── Firmware-Version (v5.6.2) ────────────────────────────────
+// ── Firmware-Version (v5.6.3) ────────────────────────────────
 // Zentrale Quelle für Boot-Banner (main.cpp) und /api/ota.
 // Bei jedem Release NUR hier ändern (+ Datei-Kopfzeilen).
-#define FW_VERSION "5.6.2"
+#define FW_VERSION "5.6.3"
 
 // ============================================================
 //  BLOCK 1 — HARDWARE-KONSTANTEN
@@ -180,6 +183,13 @@
 #define BLE_RX_LINE_MAX             256          // max. Kommandozeile (Byte)
 #define BLE_RX_QUEUE_LEN            4            // RX-Queue-Tiefe (Zeilen)
 #define BLE_BUFFER_MIN_MTU          100          // "buffer" nur ab dieser MTU
+// v5.6.3: rc-geprüfter TX-Pfad — Retry bei mbuf-Pool-Erschöpfung
+// (BLE_HS_ENOMEM/EAGAIN). Der Pool leert sich mit jedem Connection-
+// Event (typ. 30–50 ms Android): 40 × 10 ms = 400 ms Obergrenze je
+// Chunk deckt auch träge Intervalle ab, ohne den ws_task bei echtem
+// Verbindungsabriss lange zu blockieren (Disconnect bricht sofort ab).
+#define BLE_TX_RETRY_MAX            40           // Sendeversuche je Chunk
+#define BLE_TX_RETRY_DELAY_MS       10           // Backoff zwischen Versuchen
                                                  // (v5.6.1 — s. P-SW21: schützt
                                                  // ws_task vor Minuten-Blockade
                                                  // bei Default-MTU 23)

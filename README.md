@@ -1,4 +1,4 @@
-# Womo Energy Core v5.6.2
+# Womo Energy Core v5.6.3
 
 Eigenentwickeltes Energiemanagement-System für ein Wohnmobil, basierend auf einem ESP32-S3. Überwacht BMS und MPPT-Laderegler, steuert Verbraucher/Lader automatisch nach Ladezustand und Solarleistung, loggt historische Daten und liefert ein komplett offline-fähiges Web-Dashboard.
 
@@ -38,7 +38,7 @@ Die vollständige GPIO-Belegung steht in `src/config.h` (P-SW03 im Lastenheft).
 - **mDNS + NTP** (v5.5.2): Dashboard ohne IP unter `http://womo.local` erreichbar (AP wie Heimnetz); bei Heimnetz-Verbindung stellt sich die Uhr automatisch per NTP — der Browser-Sync bleibt als Fallback im AP-Betrieb erhalten. Der letzte NTP-Sync wird im Zeitzone-Tab angezeigt (v5.5.3)
 - **Schaltkriterien v5.5**: D+/Gel schalten nur noch über harte Bedingungen ab (Landstrom, BMS ungültig, SoC-Schwelle) — MPPT-Ausfälle und PV-Einbrüche schalten nichts mehr ab; EIN bei genug PV **oder** MPPT-Float. Wechselrichter: Einschalten nur manuell, Automatik nur als Schutz-Abschaltung. Manuelles AUS ist dauerhaft und reboot-fest (NVS)
 - **Web-OTA** (v5.4.1): Firmware- und Dashboard-Updates direkt aus dem Browser (System-Tab), ohne PC/USB — Dual-App-Partitionslayout, Upload mit Fortschrittsanzeige, automatischer Neustart mit Ringpuffer-Sicherung
-- **Bluetooth (BLE)** (v5.6.0): GATT-Server `WomoEnergy` mit Nordic UART Service — Live-Daten alle 2 s als newline-terminiertes JSON (identisch zum WebSocket, plus `"type":"live"`) und Kommandos (Sofort-Push, manueller Aktor-Override, Parameter lesen/schreiben). Passkey-Pairing (Bonding + MITM + Secure Connections, Schlüssel in `secrets.h`); abschaltbar im Einstellungen-Tab (NVS, Neustart). Seit v5.6.1 zusätzlich `buffer`-Kommando: PSRAM-Historie über BLE (Array + Parameter identisch `/api/buffer`, Antwort `{"type":"buffer","data":[…]}`). WLAN bleibt für Konfiguration, OTA und SD-Verlauf zuständig
+- **Bluetooth (BLE)** (v5.6.0): GATT-Server `WomoEnergy` mit Nordic UART Service — Live-Daten alle 2 s als newline-terminiertes JSON (identisch zum WebSocket, plus `"type":"live"`) und Kommandos (Sofort-Push, manueller Aktor-Override, Parameter lesen/schreiben). Passkey-Pairing (Bonding + MITM + Secure Connections, Schlüssel in `secrets.h`); abschaltbar im Einstellungen-Tab (NVS, Neustart). Seit v5.6.1 zusätzlich `buffer`-Kommando: PSRAM-Historie über BLE (Array + Parameter identisch `/api/buffer`, Antwort `{"type":"buffer","data":[…]}`). Seit v5.6.3: rc-geprüfter TX-Pfad (Raw-Host-API mit Backoff-Retry statt fehlerblindem `notify()`, msys-Pool 30 Blöcke) — behebt still verlorene/korrupte Mehrchunk-Frames — sowie `level`-Kommando (Lagesensor-Zustand für den Lage-Tab der App, identisch `/api/level`; Lage-Konfiguration/Kalibrierung bleibt WLAN-only). WLAN bleibt für Konfiguration, OTA und SD-Verlauf zuständig
 
 Die vollständige, nummerierte Anforderungsliste steht in [`Software_Lasten_Pflichtenheft.txt`](./Software_Lasten_Pflichtenheft.txt).
 
@@ -130,7 +130,7 @@ Nach erfolgreichem Upload sichert das Gerät den Ringpuffer auf SD und startet a
 
 ## Status / Roadmap
 
-**Läuft bereits:** WLAN-AP, Webserver/Dashboard, LittleFS, SD-Karten-Logging, DS3231-RTC, RGB-Status-LED, Lagesensor (MMA8452Q verbaut, Firmware inkl. REST-API vollständig, ab v5.5 inkl. Überkopf-Einbau), Web-OTA (Firmware + Dashboard, v5.4.1), mDNS `womo.local` + NTP-Zeitsync inkl. Sync-Statusanzeige (v5.5.2/v5.5.3), BLE GATT-Server mit Passkey-Pairing inkl. Historie-Abruf (v5.6.0/v5.6.1 — Funkverifikation mit realer App steht aus).
+**Läuft bereits:** WLAN-AP, Webserver/Dashboard, LittleFS, SD-Karten-Logging, DS3231-RTC, RGB-Status-LED, Lagesensor (MMA8452Q verbaut, Firmware inkl. REST-API vollständig, ab v5.5 inkl. Überkopf-Einbau), Web-OTA (Firmware + Dashboard, v5.4.1), mDNS `womo.local` + NTP-Zeitsync inkl. Sync-Statusanzeige (v5.5.2/v5.5.3), BLE GATT-Server mit Passkey-Pairing inkl. Historie-Abruf und Lage-Kommando (v5.6.0–v5.6.3 — Funkverifikation mit realer App steht aus).
 
 **Aktueller Hardware-Meilenstein:** JK-BMS-Anbindung umgestellt von RS485 (3-Pin JST-GH-Stecker nicht beschaffbar) auf direkte UART-TTL-Verdrahtung am GPS-Port (4-Pin, vorhandener Steckertyp) — kein MAX485 mehr nötig. Pinpegel am Gerät verifiziert (Pin 2/3 ~2,5V, kein VBAT). Offen: erste Kommunikationsverifikation; FW V11.287H liegt im Bereich, in dem manche Geräte über den GPS-Port keine Antwort mehr liefern — Fallback wäre die CAN-Variante (bmscan.cpp) oder eine MAX485-Doppelbrücke.
 
