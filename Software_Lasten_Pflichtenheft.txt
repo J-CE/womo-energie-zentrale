@@ -1,6 +1,6 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║     LASTEN- UND PFLICHTENHEFT — SOFTWARE                        ║
-║     Womo Energy Core v5.6.3                                      ║
+║     Womo Energy Core v5.6.4                                      ║
 ║     Stand: Schaltkriterien-Redesign (nur harte AUS-Bedingungen, ║
 ║            Float-Erkennung, WR nur manuell EIN) + D+-Pegel-Fix  ║
 ║            (Active-HIGH) + Lagesensor Überkopf-Einbau/Fehler-   ║
@@ -11,6 +11,7 @@
 ║            + BLE GATT-Server NUS mit Passkey-Pairing (v5.6.0)   ║
 ║            + BLE-Historie: "buffer"-Kommando (v5.6.1)           ║
 ║            + BLE-TX rc-geprüft + "level"-Kommando (v5.6.3)      ║
+║            + BLE-Chunkgröße auf Android-512B-Limit (v5.6.4)     ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1087,7 +1088,7 @@ P-SW20 | WEB-OTA (ota.h/.cpp)  [NEU v5.4.1]
     littlefs.bin via `pio run -t buildfs` (jeweils unter
     .pio/build/esp32-s3-devkitc-1/).
 
-P-SW21 | BLE GATT-SERVER (ble.h/.cpp)  [NEU v5.6.0, GEÄNDERT v5.6.3]
+P-SW21 | BLE GATT-SERVER (ble.h/.cpp)  [NEU v5.6.0, GEÄNDERT v5.6.4]
   Bibliothek: NimBLE-Arduino, GEPINNT auf 1.4.x (^1.4.3 in
     platformio.ini). Version 2.x setzt IDF 5 voraus und kollidiert
     mit Arduino-Core 2.x / IDF 4.4 — NICHT anheben, solange
@@ -1108,9 +1109,10 @@ P-SW21 | BLE GATT-SERVER (ble.h/.cpp)  [NEU v5.6.0, GEÄNDERT v5.6.3]
     Bonds landen im NimBLE-eigenen NVS-Bereich (überleben Reboot;
     pio run -t erase löscht auch sie → Neu-Pairing nötig).
   Framing/Fragmentierung: newline-terminiertes JSON in beide
-    Richtungen. TX zerlegt in Chunks von (Peer-MTU − 3) Byte;
-    setMTU(517) als Angebot, der Client handelt (Android:
-    requestMtu(517) → ~3 Chunks je Live-Frame; Default-MTU 23 →
+    Richtungen. TX zerlegt in Chunks von min(Peer-MTU − 3,
+    BLE_MAX_NOTIFY_LEN=512) Byte — s. v5.6.4-Fix unten (NICHT einfach
+    MTU−3); setMTU(517) als Angebot, der Client handelt (Android:
+    requestMtu(517) → 512-B-Chunks, ~3 je Live-Frame; Default-MTU 23 →
     ~70 Chunks, mit 5 ms Pacing ≈ 350 ms, unkritisch im 2-s-Tick).
     v5.6.3 BUGFIX: Versand rc-GEPRÜFT über die Raw-Host-API
     (ble_hs_mbuf_from_flat + ble_gatts_notify_custom) statt über
@@ -1136,6 +1138,25 @@ P-SW21 | BLE GATT-SERVER (ble.h/.cpp)  [NEU v5.6.0, GEÄNDERT v5.6.3]
     Pool per Build-Flag -DCONFIG_BT_NIMBLE_MSYS1_BLOCK_COUNT=30
     (platformio.ini, ~8,8 KB internes RAM; nimconfig.h übernimmt per
     #ifndef). Das feste 5-ms-Pacing zwischen Chunks bleibt.
+    v5.6.4 BUGFIX (der eigentliche Grund für den Ausfall von Live/
+    System/Laufzeit bei funktionierenden Einchunk-Frames): Chunk-
+    Größe war MTU−3 = 514 B bei MTU 517. Android kappt seit Android 13
+    EMPFANGENE Notify-Werte OS-intern hart bei GATT_MAX_ATTR_LEN =
+    512 B (github.com/espressif/esp-idf Issue #10206: "2 bytes are
+    being silently dropped and corrupting my BLE data transfer";
+    dieselbe 512-B-Grenze bestätigt in Googles offizieller Android-14-
+    Verhaltensänderungsliste, developer.android.com/about/versions/14/
+    behavior-changes-all, Abschnitt "MTU set to 517"). Die Kappung
+    geschieht NACH erfolgreicher Funkübertragung im Android-eigenen
+    Stack — ble_gatts_notify_custom() meldet rc=0, der v5.6.3-Retry-
+    Mechanismus kann diesen Fehler daher prinzipbedingt nicht sehen.
+    Jeder volle 514-B-Chunk verlor die letzten 2 Byte MITTEN in der
+    JSON-Zeile → korrupt → JSON.parse im App-Shim scheitert lautlos
+    → kein render(). Frames ≤512 B (params_get, level, resp) blieben
+    unauffällig — exakt das beobachtete Muster (Lage/Einstellungen ok,
+    Live/System/Laufzeit tot). Fix: neuer Define BLE_MAX_NOTIFY_LEN=512
+    (config.h); ble_send_raw chunked jetzt IMMER auf min(MTU−3,
+    BLE_MAX_NOTIFY_LEN), unabhängig von der ausgehandelten MTU.
     v5.6.2 BUGFIX: Versand über die Direkt-Überladung notify(data,len)
     (mbuf direkt aus den Nutzdaten) statt setValue()+notify(). Der
     Attributwert-Store hinter setValue() hat ohne explizites max_len

@@ -1,5 +1,19 @@
 // ============================================================
-//  ble.cpp — Womo Energy Core v5.6.3
+//  ble.cpp — Womo Energy Core v5.6.4
+//  v5.6.4 BUGFIX (der eigentliche Grund für "Live/System/Laufzeit tot,
+//  Lage/Einstellungen ok"): Chunk-Größe war MTU−3 = 514 B bei MTU 517.
+//  Android kappt seit Android 13 EMPFANGENE Notify-Werte OS-intern hart
+//  bei GATT_MAX_ATTR_LEN = 512 B (github.com/espressif/esp-idf #10206:
+//  "2 bytes are being silently dropped"; Android-Verhaltensänderung ab
+//  API 34 bestätigt dieselbe Grenze). Der Drop passiert NACH erfolg-
+//  reicher Funkübertragung im Android-Stack — der v5.6.3-rc-Check half
+//  hier prinzipbedingt nicht, da ble_gatts_notify_custom() rc=0 meldet
+//  und die Kappung erst beim Client stattfindet. Jeder volle 514-B-
+//  Chunk verlor die letzten 2 B mitten in der JSON-Zeile → korrupt →
+//  _bleRx-JSON.parse scheitert lautlos → Live/System/Laufzeit blieben
+//  leer. Frames ≤512 B (params/level/resp) waren nie betroffen — exakt
+//  das beobachtete Muster. Fix: ble_send_raw chunked jetzt IMMER auf
+//  min(MTU−3, BLE_MAX_NOTIFY_LEN=512), unabhängig von der MTU.
 //  v5.6.3 BUGFIX: NimBLECharacteristic::notify() (void) verschluckte
 //  JEDEN Sendefehler. Verifiziert in 1.4.3: bei msys-Pool-Erschöpfung
 //  (Default 12 × 292 B — unser Chunk-Burst hält Pakete bis zum
@@ -197,7 +211,14 @@ static bool ble_send_raw(const char* data, size_t len) {
     if (!s_active || !s_subscribed || !s_txChar || !s_server) return false;
     uint16_t mtu = s_server->getPeerMTU(s_connHandle);
     if (mtu < 23) mtu = 23;
-    const size_t chunk = (size_t)mtu - 3;
+    // v5.6.4: NICHT einfach mtu-3 verwenden — Android kappt empfangene
+    // Notify-Werte OS-seitig hart bei BLE_MAX_NOTIFY_LEN (512 B), unab-
+    // hängig von der ausgehandelten MTU (s. Define-Kommentar config.h).
+    // Bei MTU 517 wäre mtu-3=514 > 512 → Android verwirft die letzten
+    // 2 B jedes vollen Chunks STILL, nach erfolgreicher Übertragung —
+    // für uns unsichtbar, kein rc-Fehler. Daher immer das Minimum.
+    size_t chunk = (size_t)mtu - 3;
+    if (chunk > BLE_MAX_NOTIFY_LEN) chunk = BLE_MAX_NOTIFY_LEN;
     size_t off = 0;
     while (off < len) {
         size_t take = len - off;
