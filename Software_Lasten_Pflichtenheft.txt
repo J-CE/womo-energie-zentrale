@@ -1,6 +1,6 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║     LASTEN- UND PFLICHTENHEFT — SOFTWARE                        ║
-║     Womo Energy Core v5.5.3                                      ║
+║     Womo Energy Core v5.6.4                                      ║
 ║     Stand: Schaltkriterien-Redesign (nur harte AUS-Bedingungen, ║
 ║            Float-Erkennung, WR nur manuell EIN) + D+-Pegel-Fix  ║
 ║            (Active-HIGH) + Lagesensor Überkopf-Einbau/Fehler-   ║
@@ -8,6 +8,10 @@
 ║            Lagesensor (MMA8452Q) + Renogy-NVS-Wechselrichter    ║
 ║            + mDNS (womo.local) + NTP-Zeitsync (v5.5.2)          ║
 ║            + NTP-Sync-Statusanzeige im Dashboard (v5.5.3)       ║
+║            + BLE GATT-Server NUS mit Passkey-Pairing (v5.6.0)   ║
+║            + BLE-Historie: "buffer"-Kommando (v5.6.1)           ║
+║            + BLE-TX rc-geprüft + "level"-Kommando (v5.6.3)      ║
+║            + BLE-Chunkgröße auf Android-512B-Limit (v5.6.4)     ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -364,6 +368,31 @@ L-SW23 | MANUELLER AKTOR-OVERRIDE  [NEU v5.4, GEÄNDERT v5.5] [SOLLTE]
   Anzeige: Reason-String je Aktor ("MANUAL EIN (Auto in Ns)",
     "MANUAL AUS (dauerhaft)", …) + aktiver Segmentbutton.
 
+L-SW24 | BLUETOOTH-SCHNITTSTELLE (BLE) [NEU v5.6.0, GEÄND. v5.6.3] [SOLLTE]
+  Das System stellt zusätzlich zum WLAN eine BLE-Schnittstelle für
+  eine Begleit-App bereit (GATT-Server "WomoEnergy", Nordic UART
+  Service). Über BLE werden geliefert bzw. angenommen:
+    TX (→ App): das Live-JSON aus L-SW11 (identischer Inhalt wie der
+      WebSocket-Broadcast) alle 2 s sowie auf Anforderung; zusätz-
+      liches Feld "type":"live" zur Frame-Unterscheidung.
+    RX (← App): Kommandos als newline-terminiertes JSON:
+      Sofort-Push, manueller Aktor-Override (Semantik identisch
+      L-SW23), Parameter lesen/schreiben (Grenzen identisch P-SW14),
+      PSRAM-Historie (v5.6.1: "buffer", identisch /api/buffer),
+      Lagesensor-Zustand (v5.6.3: "level", identisch /api/level —
+      nur Anzeige; Lage-Konfiguration/Kalibrierung bleibt WLAN-only).
+  NICHT über BLE verfügbar (bewusst): OTA, SD-Verlaufsdaten,
+    WLAN-Konfiguration, Zeitzone — dafür bleibt das WLAN zuständig.
+  Sicherheit: Pairing zwingend (Bonding + MITM + Secure Connections)
+    mit festem 6-stelligem Passkey (secrets.h). Ohne authentifizierte
+    Verbindung werden weder Kommandos angenommen noch Live-Daten
+    gesendet. Bonds überleben Reboots (NVS).
+  Genau 1 BLE-Client gleichzeitig; nach Trennung wird automatisch
+    wieder advertised. WLAN (AP+STA) läuft parallel weiter.
+  Abschaltbar im Dashboard (Einstellungen-Tab); Default: an.
+    Umschalten erfordert Neustart (automatisch, mit Ringpuffer-
+    Sicherung). Abschalten spart ca. 70–90 KB Heap.
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 TEIL 2 — PFLICHTENHEFT (Wie ist die Software umgesetzt?)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -424,6 +453,8 @@ P-SW02 | PROJEKTSTRUKTUR (QUELLDATEIEN)  [GEÄNDERT v5.1]
   src/http_server.h/.cpp HTTP-Server, WebSocket, REST-API (Streaming)
   src/ota.h/.cpp        Web-OTA: Firmware- & Dashboard-Upload per
                         Browser (Update.h, Dual-App), neu v5.4.1
+  src/ble.h/.cpp        BLE GATT-Server NUS: Live-Push + Kommandos,
+                        Passkey-Pairing (NimBLE 1.4.x), neu v5.6.0
   src/main.cpp          Setup, FreeRTOS-Tasks, HW-Watchdog
   data/index.html       Dashboard (LittleFS, Offline-fähig)
   partitions_16mb.csv   Partitionstabelle (Dual-App OTA, v5.4.1)
@@ -493,8 +524,11 @@ P-SW05 | FREERTOS TASK-ARCHITEKTUR
       HEX-TX Temperatur senden, inverter_poll()
   Core 0 | Prio 2 | logger_task (4kB Stack)
     → watchdog_kick(WDT_LOGGER) + logger_flush_sd(), alle 5s
-  Core 0 | Prio 2 | ws_task     (4kB Stack)
-    → webserver_broadcast() alle 2s an alle WS-Clients
+  Core 0 | Prio 2 | ws_task     (6kB Stack, v5.6.0: 4→6kB)
+    → webserver_broadcast() alle 2s: ble_tick() (BLE-RX-Kommandos
+      ausführen + antworten), danach EIN JSON-Build für WS-Clients
+      UND BLE-Notify (v5.6.0). Stack erhöht wegen JSON-Doc (512 B)
+      + Zeilenpuffer (256 B) des BLE-Kommandopfads.
   Core 0 | Prio 1 | level_task  (4kB Stack, optional)
     → MMA8452Q lesen (250ms = 4Hz), Neigung + Keilgeometrie
       berechnen, Ergebnis in Cache ablegen (kein I2C in HTTP-Pfad)
@@ -663,6 +697,11 @@ P-SW12 | WEBSERVER-ARCHITEKTUR
     GET  /api/levelcfg       → Lagesensor-Konfiguration (JSON)
     POST /api/levelcfg       → Lagesensor-Konfiguration setzen
     POST /api/levelcalib     → Lagesensor kalibrieren {"reset":bool}
+    GET  /api/ble            → BLE-Status {en, active, connected,
+                               subscribed, name} (v5.6.0)
+    POST /api/ble            → BLE ein-/ausschalten {"en":0|1};
+                               bei Änderung deferred Reboot über
+                               ota_schedule_reboot() (v5.6.0)
     GET  /api/ota            → OTA-Info: Version, laufende/nächste
                                Partition, App-Max, LittleFS-Größen
     POST /api/ota?type=fw|fs → Web-OTA-Upload (Multipart): Firmware
@@ -727,6 +766,10 @@ P-SW13 | DASHBOARD (data/index.html)  [GEÄNDERT v5.4]
     - Speichern → POST /api/params, Fabrik-Reset → POST /api/reset
     - Zeitzonen-Auswahl (Dropdown gängiger EU-Zonen + benutzerdef.
       POSIX-String) → GET/POST /api/tz, zeigt aktive Abkürzung+Offset
+    - Bluetooth-Karte (v5.6.0): Statuszeile (aus / wartet auf
+      Verbindung / verbunden / Live-Push aktiv) + An/Aus-Auswahl →
+      GET/POST /api/ble; Speichern mit Änderung löst Neustart aus
+      (Toast-Hinweis, Status-Reload nach ~12 s)
   Zeit-Sync: POST /api/time bei Connect und alle 5 min.
 
 P-SW14 | VARIABLE PARAMETER (NVS, Namespace "womo_cfg") [GEÄNDERT v5.5]
@@ -1045,9 +1088,218 @@ P-SW20 | WEB-OTA (ota.h/.cpp)  [NEU v5.4.1]
     littlefs.bin via `pio run -t buildfs` (jeweils unter
     .pio/build/esp32-s3-devkitc-1/).
 
+P-SW21 | BLE GATT-SERVER (ble.h/.cpp)  [NEU v5.6.0, GEÄNDERT v5.6.4]
+  Bibliothek: NimBLE-Arduino, GEPINNT auf 1.4.x (^1.4.3 in
+    platformio.ini). Version 2.x setzt IDF 5 voraus und kollidiert
+    mit Arduino-Core 2.x / IDF 4.4 — NICHT anheben, solange
+    platform ^6.9.0 gilt. Koexistenz BLE + WiFi (AP+STA) auf dem
+    S3 verifiziert; Heap-Kosten bei aktivem Stack ≈ 70–90 KB.
+  GATT-Layout (Nordic UART Service):
+    Service 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
+    RX      6E400002-… (Client→Server): WRITE | WRITE_NR |
+            WRITE_ENC | WRITE_AUTHEN — der Stack weist unver-
+            schlüsselte/unauthentifizierte Writes auf ATT-Ebene ab.
+    TX      6E400003-… (Server→Client): NOTIFY. Abo wird nur über-
+            nommen, wenn onSubscribe eine verschlüsselte UND
+            authentifizierte Verbindung meldet (sonst bleibt
+            s_subscribed=false → es wird nichts gesendet).
+  Security: setSecurityAuth(bond=1, mitm=1, sc=1), IO-Capability
+    DISPLAY_ONLY, fester Passkey BLE_PASSKEY aus secrets.h (6-stellig).
+    onAuthenticationComplete ohne Verschlüsselung → disconnect().
+    Bonds landen im NimBLE-eigenen NVS-Bereich (überleben Reboot;
+    pio run -t erase löscht auch sie → Neu-Pairing nötig).
+  Framing/Fragmentierung: newline-terminiertes JSON in beide
+    Richtungen. TX zerlegt in Chunks von min(Peer-MTU − 3,
+    BLE_MAX_NOTIFY_LEN=512) Byte — s. v5.6.4-Fix unten (NICHT einfach
+    MTU−3); setMTU(517) als Angebot, der Client handelt (Android:
+    requestMtu(517) → 512-B-Chunks, ~3 je Live-Frame; Default-MTU 23 →
+    ~70 Chunks, mit 5 ms Pacing ≈ 350 ms, unkritisch im 2-s-Tick).
+    v5.6.3 BUGFIX: Versand rc-GEPRÜFT über die Raw-Host-API
+    (ble_hs_mbuf_from_flat + ble_gatts_notify_custom) statt über
+    NimBLECharacteristic::notify(). notify() ist void und verschluckt
+    in 1.4.3 zwei Fehlerpfade still (im Quellcode verifiziert):
+    (1) msys-Pool-Erschöpfung (Default 12 × 292 B ≈ 3,5 KB) →
+    ble_hs_mbuf_from_flat() liefert NULL; (2) notify() reicht NULL
+    ungeprüft an ble_gatts_notify_custom() weiter, wo NULL "lies den
+    Attributwert-Store und sende DEN" bedeutet (ble_gattc.c
+    Z. 4172ff.) → leerer/stehengebliebener Frame MITTEN in der Zeile;
+    weitere ENOMEM tiefer im Stack verwerfen Chunks still. Der Live-
+    Frame-Burst (3–4 Chunks à 514 B, ~2 msys-Blöcke je Chunk, gepuffert
+    bis zum nächsten Connection-Event von 30–50 ms) erschöpfte den
+    Pool → '\n'-Assemblierung bei Mehrchunk-Frames (Live/Buffer)
+    deterministisch zerstört, Ein-Chunk-Frames (resp/params ≤ 512 B)
+    unauffällig. Fix ble_notify_chunk(): mbuf selbst allozieren (nie
+    NULL weiterreichen), rc auswerten, bei ENOMEM/EAGAIN Backoff-Retry
+    (BLE_TX_RETRY_MAX=40 × BLE_TX_RETRY_DELAY_MS=10 ms, config.h) —
+    der Pool leert sich je Connection-Event; Disconnect bricht sofort
+    ab. Bei Abbruch: einzelnes '\n' als Framing-Reset (App verwirft
+    die halbe Zeile) + Serial-Log mit rc/Zählern (Diagnose: "alle
+    Chunks rc=0" ⇒ Firmware-TX beweisbar sauber). Flankierend msys-
+    Pool per Build-Flag -DCONFIG_BT_NIMBLE_MSYS1_BLOCK_COUNT=30
+    (platformio.ini, ~8,8 KB internes RAM; nimconfig.h übernimmt per
+    #ifndef). Das feste 5-ms-Pacing zwischen Chunks bleibt.
+    v5.6.4 BUGFIX (der eigentliche Grund für den Ausfall von Live/
+    System/Laufzeit bei funktionierenden Einchunk-Frames): Chunk-
+    Größe war MTU−3 = 514 B bei MTU 517. Android kappt seit Android 13
+    EMPFANGENE Notify-Werte OS-intern hart bei GATT_MAX_ATTR_LEN =
+    512 B (github.com/espressif/esp-idf Issue #10206: "2 bytes are
+    being silently dropped and corrupting my BLE data transfer";
+    dieselbe 512-B-Grenze bestätigt in Googles offizieller Android-14-
+    Verhaltensänderungsliste, developer.android.com/about/versions/14/
+    behavior-changes-all, Abschnitt "MTU set to 517"). Die Kappung
+    geschieht NACH erfolgreicher Funkübertragung im Android-eigenen
+    Stack — ble_gatts_notify_custom() meldet rc=0, der v5.6.3-Retry-
+    Mechanismus kann diesen Fehler daher prinzipbedingt nicht sehen.
+    Jeder volle 514-B-Chunk verlor die letzten 2 Byte MITTEN in der
+    JSON-Zeile → korrupt → JSON.parse im App-Shim scheitert lautlos
+    → kein render(). Frames ≤512 B (params_get, level, resp) blieben
+    unauffällig — exakt das beobachtete Muster (Lage/Einstellungen ok,
+    Live/System/Laufzeit tot). Fix: neuer Define BLE_MAX_NOTIFY_LEN=512
+    (config.h); ble_send_raw chunked jetzt IMMER auf min(MTU−3,
+    BLE_MAX_NOTIFY_LEN), unabhängig von der ausgehandelten MTU.
+    v5.6.2 BUGFIX: Versand über die Direkt-Überladung notify(data,len)
+    (mbuf direkt aus den Nutzdaten) statt setValue()+notify(). Der
+    Attributwert-Store hinter setValue() hat ohne explizites max_len
+    das ATT-Limit BLE_ATT_ATTR_MAX_LEN = 512 B; NimBLEAttValue::
+    setValue() verwirft größere Werte STILL (Log "value exceeds max",
+    return false — von NimBLECharacteristic::setValue [void] ver-
+    schluckt), notify() sendete dann den stehengebliebenen alten
+    Attributwert. Bei MTU 517 (Chunk 514 B) waren dadurch alle vollen
+    Chunks der Live-/Buffer-Frames korrupt; nur Ein-Chunk-Frames
+    (resp/params ≤ 512 B) funktionierten. Der Direkt-Versand umgeht
+    den Store vollständig — keine Stale-Data-Mechanik mehr im Pfad;
+    Grenze ist allein die Peer-MTU, die das Chunking einhält.
+  Kommandos (RX → Ausführung in ble_tick):
+    {"cmd":"live"}        → Sofort-Push des Live-JSON (Flag, gesendet
+                            nach Queue-Drain im selben Tick)
+    {"cmd":"manual","actuator":"dplus|gel|wr","mode":"auto|on|off"}
+                          → logic_set_manual, Semantik identisch
+                            POST /api/manual; danach Sofort-Push
+    {"cmd":"params_get"}  → {"type":"params","data":{…}}
+    {"cmd":"params_set","data":{…}} → params_apply_json() —
+                            gemeinsamer Validierungspfad mit
+                            POST /api/params (v5.6.0, params.cpp)
+    {"cmd":"buffer","offset":…,"count":…,"step":…}  (v5.6.1)
+                          → PSRAM-Historie. Vertrag mit der App:
+                            Erfolg {"type":"buffer","data":[…]} —
+                            Array + Parameter-Semantik/Clamps
+                            IDENTISCH GET /api/buffer (offset Def. 0,
+                            count Def. 900 / max 2000, step min 1);
+                            Fehler {"type":"buffer","error":"…"}
+                            ("MTU zu klein" | "OOM PSRAM").
+                            Gemeinsamer Builder webserver_buffer_json()
+                            (v5.6.1, http_server.cpp — handle_buffer
+                            nutzt denselben; Array in PSRAM, Aufrufer
+                            gibt frei). Versand ohne Umkopieren:
+                            Präfix + PSRAM-Array + "}\n" als DREI
+                            ble_send_raw-Aufrufe — das Framing hängt
+                            am '\n', nicht an Notify-Grenzen.
+                            MTU-Guard BLE_BUFFER_MIN_MTU (100): bei
+                            Default-MTU 23 wären ~120 KB ≈ 6000
+                            Chunks × 5 ms ≈ 30+ s ws_task-Blockade —
+                            abgelehnt; die App verhandelt MTU 517
+                            (~240 Chunks ≈ 1,2 s, Live-Tick pausiert
+                            währenddessen, unkritisch bei 60-s-
+                            Graph-Refresh der App).
+    {"cmd":"level"}       → {"type":"level","data":{…}}  (v5.6.3)
+                            Lagesensor-Zustand, Objekt identisch
+                            GET /api/level (~280 B = 1 Chunk); für
+                            den Lage-Tab der App (Poll bei aktivem
+                            Tab). Lage-Konfiguration/Kalibrierung
+                            bewusst NICHT über BLE (L-SW24).
+    Antworten: {"type":"resp","cmd":"…","ok":…[,"err":"…"]}
+  Kontext-Disziplin (analog AsyncTCP-Regeln):
+    NimBLE-Callbacks (Host-Task) verarbeiten NICHTS: onWrite füttert
+    nur den Zeilen-Assembler (256 B, Überlauf → Zeile verwerfen);
+    komplette Zeilen gehen per xQueueSend (Timeout 0, volle Queue
+    verwirft) in eine FreeRTOS-Queue (4 × 256 B). Ausführung + ALLE
+    Sendungen (2-s-Broadcast, Antworten, Sofort-Push) laufen aus-
+    schließlich im ws_task → genau ein Sende-Kontext, keine Locks.
+  Broadcast-Integration (http_server.cpp): webserver_broadcast()
+    ruft zuerst ble_tick(), baut dann das Live-JSON EINMAL und
+    verteilt an WS (ws.textAll) und BLE (ble_notify_live) — kein
+    zweiter JSON-Build, kein eigener BLE-Task. Live-JSON trägt
+    zusätzlich "type":"live" (additiv; Dashboard ignoriert es).
+    Auf-Anforderung-Push nutzt webserver_live_json() (neuer Wrapper
+    um build_live_json).
+  Schalter: NVS-Namespace "ble", Key "en" (Default 1 = an), eigener
+    Namespace analog "wifi"/"clock" (KEIN womo_cfg-Parameter).
+    POST /api/ble bei Änderung: ble_set_enabled schreibt NVS,
+    ota_schedule_reboot(1500) plant den Neustart über den sicheren
+    OTA-Pfad (Ringpuffer-Sicherung in ota_tick, loop-Kontext) —
+    Laufzeit-De-Init des BLE-Stacks wird bewusst vermieden.
+  Nicht über BLE: OTA, SD-/Verlaufsdaten, WLAN-Konfig, Zeitzone
+    (bewusste Abgrenzung, s. L-SW24).
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ÄNDERUNGSPROTOKOLL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+─── v5.6.1 → v5.6.2 ─────────────────────────────────────────────
+
+  BLE-TX-BUGFIX (Symptom: System-Tab leer, Live-Graph nicht ladbar,
+  Params/Einstellungen funktionierten):
+  • ble_send_raw: Direkt-Notify notify(data,len) statt
+    setValue()+notify(). setValue() lief über den Attributwert-Store
+    (Default-Limit BLE_ATT_ATTR_MAX_LEN = 512 B) und verwarf Chunks
+    >512 B still — notify() verschickte stale Daten. Bei MTU 517
+    (Chunk = 514 B) korrumpierte das jeden mehrchunkigen Frame
+    (live, buffer); Ein-Chunk-Frames (resp, params) blieben intakt,
+    was das Symptombild exakt erklärt. Befund gegen die gepinnte
+    NimBLE-1.4.3-Quelle verifiziert (NimBLEAttValue.h Z. 380 ff.,
+    NimBLECharacteristic.cpp Z. 443 ff.). [P-SW21]
+  • Kein API-/Vertragsänderung; App v1.0.3 unverändert kompatibel.
+    Android 14+ verhandelt stets MTU 517 (requestMtu-Wunschwert
+    wird ignoriert) — app-seitig nicht umgehbar gewesen.
+
+─── v5.6.0 → v5.6.1 ─────────────────────────────────────────────
+
+  BLE-HISTORIE:
+  • Neues Kommando {"cmd":"buffer","offset","count","step"} —
+    PSRAM-Ringpuffer über BLE NUS. Antwortvertrag (mit App v1.0.0
+    abgestimmt): {"type":"buffer","data":[…]} bzw.
+    {"type":"buffer","error":"…"}. Array, Parameter-Semantik und
+    Clamps identisch GET /api/buffer. [L-SW24, P-SW21]
+  • webserver_buffer_json() NEU (http_server.h/.cpp): Array-Builder
+    aus handle_buffer extrahiert — gemeinsamer Pfad HTTP+BLE
+    (gleiche Disziplin wie params_apply_json in v5.6.0); /api/buffer
+    extern unverändert. [P-SW12, P-SW21]
+  • MTU-Guard BLE_BUFFER_MIN_MTU=100 (NEU config.h): buffer-Abruf
+    unter dieser MTU abgelehnt (Schutz vor ws_task-Blockade bei
+    Default-MTU 23). [P-SW21]
+  • Antwortframe-Format: KEINE Änderung — die App korreliert seit
+    v1.0.0 über type/cmd (Abgleich-Ergebnis; das ursprünglich
+    app-seitig erwartete id-Echo entfällt beidseitig).
+
+─── v5.5.3 → v5.6.0 ─────────────────────────────────────────────
+
+  BLE GATT-SERVER (NUS):
+  • Neues Modul ble.h/.cpp: GATT-Server "WomoEnergy" mit Nordic
+    UART Service — Live-JSON alle 2 s (identisch WebSocket, plus
+    "type":"live") und Kommandos (Sofort-Push, manueller Aktor-
+    Override, Parameter lesen/schreiben) als newline-terminiertes
+    JSON. [L-SW24, P-SW21]
+  • Pairing zwingend: Bonding + MITM + Secure Connections, fester
+    Passkey BLE_PASSKEY (NEU in secrets.h/secrets_h.example).
+    RX-Writes stackseitig nur authentifiziert (WRITE_ENC|AUTHEN),
+    TX-Abo nur über authentifizierte Verbindung. [P-SW21]
+  • NimBLE-Arduino @ ^1.4.3 NEU in lib_deps — gepinnt auf 1.4.x
+    (2.x braucht IDF 5, kollidiert mit Arduino-Core 2.x).
+  • Broadcast-Umbau http_server.cpp: EIN JSON-Build je 2-s-Tick für
+    WS + BLE; ble_tick() (Kommando-Queue) läuft im ws_task —
+    NimBLE-Callbacks legen RX-Zeilen nur in eine FreeRTOS-Queue
+    (gleiche Kontext-Disziplin wie AsyncTCP). ws-Task-Stack 4→6 kB.
+    [P-SW05, P-SW12, P-SW21]
+  • params_apply_json() NEU (params.h/.cpp): gemeinsamer Anwendungs-/
+    Validierungspfad für POST /api/params und BLE params_set;
+    handle_params_post entsprechend refaktoriert (Semantik
+    unverändert). [P-SW14]
+  • ota_schedule_reboot() NEU exportiert (ota.h/.cpp): deferred
+    Reboot über den sicheren OTA-Pfad auch für andere Module.
+    [P-SW20]
+  • /api/ble NEU (GET Status, POST Schalter) + Bluetooth-Karte im
+    Einstellungen-Tab (Status + An/Aus, Neustart-Hinweis). Schalter
+    in NVS-Namespace "ble" (Default: an). [P-SW12, P-SW13]
 
 ─── v5.5 → v5.5.1 ───────────────────────────────────────────────
 

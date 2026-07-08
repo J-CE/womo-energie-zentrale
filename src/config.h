@@ -1,7 +1,24 @@
 // ============================================================
-//  config.h — Womo Energy Core v5.5.3
+//  config.h — Womo Energy Core v5.6.4
 //  Zielplattform: ESP32-S3 DevKitC-1 N16R8
 //
+//  v5.6.4: BLE-TX-Chunkgröße hart auf 512 B gedeckelt (BLE_MAX_NOTIFY_LEN)
+//          statt MTU−3=514 B — Android kappt seit Android 13 empfangene
+//          Notify-Werte intern bei GATT_MAX_ATTR_LEN=512 B und verwirft
+//          die letzten 2 Byte JEDES vollen 514-B-Chunks STILL (nach
+//          erfolgreicher Funkübertragung, für die ESP-Seite unsichtbar —
+//          der v5.6.3-rc-Check half hier prinzipbedingt nicht). Traf nur
+//          Mehrchunk-Frames (Live/Buffer); Einchunk-Frames (params/level/
+//          resp, alle <512 B) blieben unauffällig. Siehe P-SW21.
+//  v5.6.3: BLE-TX rc-geprüft (Raw-Host-API statt notify()-void) —
+//          neue Defines BLE_TX_RETRY_MAX/_DELAY_MS; "level"-Kommando
+//          (Lage-Tab der App); msys-Pool 30 Blöcke (platformio.ini).
+//  v5.6.2: BLE-TX-Bugfix — Direkt-Notify statt Attributwert-Store
+//          (512-B-Limit korrumpierte Live-/Buffer-Frames bei MTU 517).
+//  v5.6.1: BLE "buffer"-Kommando (PSRAM-Historie über NUS);
+//          neues Define BLE_BUFFER_MIN_MTU.
+//  v5.6.0: BLE GATT-Server (NUS). Neuer Define-Block "Bluetooth
+//          Low Energy" (Name, MTU, Queue); BLE_PASSKEY → secrets.h.
 //  v5.5.3: NTP-Sync-Status im Dashboard (net.ntp im Live-JSON).
 //  v5.5.2: mDNS (womo.local) + NTP-Zeitsync (STA). Neue Defines
 //          MDNS_HOSTNAME und NTP_SERVER im Netzwerkdienst-Block.
@@ -20,10 +37,10 @@
 
 #pragma once
 
-// ── Firmware-Version (v5.5.3) ────────────────────────────────
+// ── Firmware-Version (v5.6.4) ────────────────────────────────
 // Zentrale Quelle für Boot-Banner (main.cpp) und /api/ota.
 // Bei jedem Release NUR hier ändern (+ Datei-Kopfzeilen).
-#define FW_VERSION "5.5.3"
+#define FW_VERSION "5.6.4"
 
 // ============================================================
 //  BLOCK 1 — HARDWARE-KONSTANTEN
@@ -161,6 +178,40 @@
 // derselbe Pfad wie der Browser-Sync; im AP-Only-Betrieb bleibt der
 // Browser die Zeitquelle. Kein configTime() → POSIX-TZ bleibt unberührt.
 #define NTP_SERVER                  "pool.ntp.org"
+
+// ── Bluetooth Low Energy (v5.6.0) ────────────────────────────
+// GATT-Server mit Nordic UART Service (NUS) — newline-delimited
+// JSON, Live-Push alle 2s + Kommandos (s. ble.h). Passkey-Pairing
+// (BLE_PASSKEY in secrets.h). Schalter: NVS "ble"/"en", Toggle im
+// Dashboard (System-Tab) → deferred Reboot. NimBLE + WiFi koexistent
+// (Kostenpunkt ≈ 70–90 KB Heap bei aktivem Stack).
+#define BLE_DEVICE_NAME             "WomoEnergy" // Advertising-Name
+#define DEFAULT_BLE_ENABLED         1            // NVS-Default: an
+#define BLE_PREF_MTU                517          // max. MTU-Angebot (Client handelt)
+#define BLE_RX_LINE_MAX             256          // max. Kommandozeile (Byte)
+#define BLE_RX_QUEUE_LEN            4            // RX-Queue-Tiefe (Zeilen)
+#define BLE_BUFFER_MIN_MTU          100          // "buffer" nur ab dieser MTU
+// v5.6.3: rc-geprüfter TX-Pfad — Retry bei mbuf-Pool-Erschöpfung
+// (BLE_HS_ENOMEM/EAGAIN). Der Pool leert sich mit jedem Connection-
+// Event (typ. 30–50 ms Android): 40 × 10 ms = 400 ms Obergrenze je
+// Chunk deckt auch träge Intervalle ab, ohne den ws_task bei echtem
+// Verbindungsabriss lange zu blockieren (Disconnect bricht sofort ab).
+#define BLE_TX_RETRY_MAX            40           // Sendeversuche je Chunk
+#define BLE_TX_RETRY_DELAY_MS       10           // Backoff zwischen Versuchen
+// v5.6.4: Android GATT_MAX_ATTR_LEN (seit Android 13) — empfangene
+// Notify-Werte werden intern auf dieses Limit gekappt; alles darüber
+// wird STILL um den Überschuss verkürzt (2 B bei unserem bisherigen
+// 514-B-Chunk = MTU−3 bei MTU 517). NICHT MTU-abhängig — harte OS-
+// Konstante, unabhängig von der ausgehandelten MTU. Chunking daher
+// IMMER min(MTU−3, BLE_MAX_NOTIFY_LEN), nicht nur MTU−3.
+// Quelle: github.com/espressif/esp-idf Issue #10206 ("2 bytes are
+// being silently dropped"); Android-Verhaltensänderungen ab API 34
+// bestätigen dieselbe 512-B-Grenze (developer.android.com/about/
+// versions/14/behavior-changes-all → "MTU set to 517").
+#define BLE_MAX_NOTIFY_LEN          512          // Android-Notify-Hardlimit
+                                                 // (v5.6.1 — s. P-SW21: schützt
+                                                 // ws_task vor Minuten-Blockade
+                                                 // bei Default-MTU 23)
 
 // ── RAM-Ringpuffer (PSRAM) ───────────────────────────────────
 #define LOG_BUFFER_SIZE             86400       // 48h @ 2s = 86400 Einträge

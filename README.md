@@ -1,4 +1,4 @@
-# Womo Energy Core v5.5.3
+# Womo Energy Core v5.6.4
 
 Eigenentwickeltes Energiemanagement-System für ein Wohnmobil, basierend auf einem ESP32-S3. Überwacht BMS und MPPT-Laderegler, steuert Verbraucher/Lader automatisch nach Ladezustand und Solarleistung, loggt historische Daten und liefert ein komplett offline-fähiges Web-Dashboard.
 
@@ -38,6 +38,7 @@ Die vollständige GPIO-Belegung steht in `src/config.h` (P-SW03 im Lastenheft).
 - **mDNS + NTP** (v5.5.2): Dashboard ohne IP unter `http://womo.local` erreichbar (AP wie Heimnetz); bei Heimnetz-Verbindung stellt sich die Uhr automatisch per NTP — der Browser-Sync bleibt als Fallback im AP-Betrieb erhalten. Der letzte NTP-Sync wird im Zeitzone-Tab angezeigt (v5.5.3)
 - **Schaltkriterien v5.5**: D+/Gel schalten nur noch über harte Bedingungen ab (Landstrom, BMS ungültig, SoC-Schwelle) — MPPT-Ausfälle und PV-Einbrüche schalten nichts mehr ab; EIN bei genug PV **oder** MPPT-Float. Wechselrichter: Einschalten nur manuell, Automatik nur als Schutz-Abschaltung. Manuelles AUS ist dauerhaft und reboot-fest (NVS)
 - **Web-OTA** (v5.4.1): Firmware- und Dashboard-Updates direkt aus dem Browser (System-Tab), ohne PC/USB — Dual-App-Partitionslayout, Upload mit Fortschrittsanzeige, automatischer Neustart mit Ringpuffer-Sicherung
+- **Bluetooth (BLE)** (v5.6.0): GATT-Server `WomoEnergy` mit Nordic UART Service — Live-Daten alle 2 s als newline-terminiertes JSON (identisch zum WebSocket, plus `"type":"live"`) und Kommandos (Sofort-Push, manueller Aktor-Override, Parameter lesen/schreiben). Passkey-Pairing (Bonding + MITM + Secure Connections, Schlüssel in `secrets.h`); abschaltbar im Einstellungen-Tab (NVS, Neustart). Seit v5.6.1 zusätzlich `buffer`-Kommando: PSRAM-Historie über BLE (Array + Parameter identisch `/api/buffer`, Antwort `{"type":"buffer","data":[…]}`). Seit v5.6.3: rc-geprüfter TX-Pfad (Raw-Host-API mit Backoff-Retry statt fehlerblindem `notify()`, msys-Pool 30 Blöcke) — behebt still verlorene/korrupte Mehrchunk-Frames — sowie `level`-Kommando (Lagesensor-Zustand für den Lage-Tab der App, identisch `/api/level`; Lage-Konfiguration/Kalibrierung bleibt WLAN-only). Seit v5.6.4: Chunk-Größe hart auf 512 B gedeckelt (statt MTU−3=514 B) — Android kappt empfangene Notify-Werte seit Android 13 OS-intern bei genau diesem Limit und verwarf so lautlos 2 B je vollem Chunk, was Mehrchunk-Frames (Live/Buffer) korrumpierte, während Einchunk-Frames (params/level) unauffällig blieben. WLAN bleibt für Konfiguration, OTA und SD-Verlauf zuständig
 
 Die vollständige, nummerierte Anforderungsliste steht in [`Software_Lasten_Pflichtenheft.txt`](./Software_Lasten_Pflichtenheft.txt).
 
@@ -48,7 +49,7 @@ Die vollständige, nummerierte Anforderungsliste steht in [`Software_Lasten_Pfli
 ├── partitions_16mb.csv     # Eigene Partitionstabelle (Dual-App OTA)
 ├── src/
 │   ├── config.h            # GPIO-Pins, Default-Parameter, Tuning-Konstanten
-│   ├── secrets.h           # WLAN-Zugangsdaten (NICHT im Repo, siehe unten)
+│   ├── secrets.h           # WLAN-Zugangsdaten + BLE-Passkey (NICHT im Repo, s. unten)
 │   ├── main.cpp            # Setup, FreeRTOS-Tasks, Hardware-Watchdog
 │   ├── bms.h / .cpp        # JK-BMS RS485-Parser
 │   ├── bmscan.h / .cpp     # JK-BMS CAN-Parser (Alternative zu bms.cpp)
@@ -61,6 +62,7 @@ Die vollständige, nummerierte Anforderungsliste steht in [`Software_Lasten_Pfli
 │   ├── clock.h / .cpp      # Zeitdienst (DS3231-RTC)
 │   ├── watchdog.h / .cpp   # Software-Modulüberwachung
 │   ├── ota.h / .cpp        # Web-OTA (Firmware- & Dashboard-Update per Browser)
+│   ├── ble.h / .cpp        # BLE GATT-Server (NUS, Live-Push + Kommandos)
 │   └── http_server.h / .cpp# Webserver, WebSocket, REST-API
 └── data/
     └── index.html          # Dashboard (LittleFS, offline-fähig)
@@ -70,16 +72,17 @@ Die vollständige, nummerierte Anforderungsliste steht in [`Software_Lasten_Pfli
 
 Voraussetzung: [PlatformIO](https://platformio.org/) (über VS Code oder CLI).
 
-**1. WLAN-Zugangsdaten anlegen** (einmalig, wird nicht versioniert):
+**1. Zugangsdaten anlegen** (einmalig, wird nicht versioniert):
 
 ```cpp
 // src/secrets.h
 #pragma once
 #define WIFI_AP_SSID     "DeinSSID"
 #define WIFI_AP_PASSWORD "DeinPasswort"
+#define BLE_PASSKEY      123456        // 6-stellig — beim BLE-Pairing abgefragt (v5.6.0)
 ```
 
-und in `config.h` per `#include "secrets.h"` einbinden.
+und in `config.h` per `#include "secrets.h"` einbinden. Vorlage: `secrets_h.example`.
 
 **2. Firmware bauen und flashen:**
 
@@ -127,7 +130,7 @@ Nach erfolgreichem Upload sichert das Gerät den Ringpuffer auf SD und startet a
 
 ## Status / Roadmap
 
-**Läuft bereits:** WLAN-AP, Webserver/Dashboard, LittleFS, SD-Karten-Logging, DS3231-RTC, RGB-Status-LED, Lagesensor (MMA8452Q verbaut, Firmware inkl. REST-API vollständig, ab v5.5 inkl. Überkopf-Einbau), Web-OTA (Firmware + Dashboard, v5.4.1), mDNS `womo.local` + NTP-Zeitsync inkl. Sync-Statusanzeige (v5.5.2/v5.5.3).
+**Läuft bereits:** WLAN-AP, Webserver/Dashboard, LittleFS, SD-Karten-Logging, DS3231-RTC, RGB-Status-LED, Lagesensor (MMA8452Q verbaut, Firmware inkl. REST-API vollständig, ab v5.5 inkl. Überkopf-Einbau), Web-OTA (Firmware + Dashboard, v5.4.1), mDNS `womo.local` + NTP-Zeitsync inkl. Sync-Statusanzeige (v5.5.2/v5.5.3), BLE GATT-Server mit Passkey-Pairing inkl. Historie-Abruf und Lage-Kommando (v5.6.0–v5.6.3 — Funkverifikation mit realer App steht aus).
 
 **Aktueller Hardware-Meilenstein:** JK-BMS-Anbindung umgestellt von RS485 (3-Pin JST-GH-Stecker nicht beschaffbar) auf direkte UART-TTL-Verdrahtung am GPS-Port (4-Pin, vorhandener Steckertyp) — kein MAX485 mehr nötig. Pinpegel am Gerät verifiziert (Pin 2/3 ~2,5V, kein VBAT). Offen: erste Kommunikationsverifikation; FW V11.287H liegt im Bereich, in dem manche Geräte über den GPS-Port keine Antwort mehr liefern — Fallback wäre die CAN-Variante (bmscan.cpp) oder eine MAX485-Doppelbrücke.
 
@@ -135,6 +138,7 @@ Nach erfolgreichem Upload sichert das Gerät den Ringpuffer auf SD und startet a
 - Lagesensor: Funktionstest am Fahrzeug (Kalibrierung in der Ebene, Keilwerte gegen reale Schräglage plausibilisieren)
 - Renogy-Wechselrichter: Status-Eingänge (Power/Alarm) eingebaut — Pinbelegung/Spannungsteiler noch am realen Gerät zu verifizieren
 - Remote-Telemetrie (SIM7080G oder Walter-Board, MQTT über TLS)
+- Android-App (nativer BLE-Container: `index.html` in WebView, BLE-Bridge auf die bestehende `render(D)`-Pipeline)
 - Eigene Delphi-FireMonkey-App (Android/Windows)
 
 Details und vollständiger Änderungsverlauf: [`Software_Lasten_Pflichtenheft.txt`](./Software_Lasten_Pflichtenheft.txt).
@@ -152,6 +156,7 @@ Die Firmware nutzt folgende Open-Source-Bibliotheken (unverändert, dynamisch ü
 | ESPAsyncWebServer (ESP32Async-Fork) | LGPL-3.0 | github.com/ESP32Async/ESPAsyncWebServer |
 | AsyncTCP (ESP32Async-Fork) | LGPL-3.0 | github.com/ESP32Async/AsyncTCP |
 | ArduinoJson | MIT | github.com/bblanchon/ArduinoJson |
+| NimBLE-Arduino (gepinnt 1.4.x) | Apache-2.0 | github.com/h2zero/NimBLE-Arduino |
 | FS / SD / LittleFS | LGPL-2.1 (Teil von arduino-esp32) | github.com/espressif/arduino-esp32 |
 
 Es gelten jeweils die Originallizenzen der Bibliotheken; sie werden hier nur referenziert, nicht im Repo mitgeliefert oder verändert.

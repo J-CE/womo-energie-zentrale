@@ -1,5 +1,9 @@
 // ============================================================
-//  http_server.cpp — Womo Energy Core v5.5.3
+//  http_server.cpp — Womo Energy Core v5.6.1
+//  v5.6.1: webserver_buffer_json() — Ringpuffer-Array-Builder als
+//  gemeinsamer Pfad HTTP+BLE (handle_buffer nutzt ihn jetzt auch).
+//  v5.6.0: BLE-Anbindung — Broadcast an WS+BLE (ein JSON-Build),
+//  ble_tick() im ws_task-Kontext, /api/ble (Schalter), "type":"live".
 //
 //  v5.5.3: NTP-Sync-Status im Live-JSON (net.ntp = UTC-Epoch des
 //          letzten erfolgreichen NTP-Syncs, 0 = nie) für die
@@ -29,6 +33,7 @@
 #include "clock.h"
 #include "level.h"
 #include "ota.h"
+#include "ble.h"       // v5.6.0: BLE-Broadcast + /api/ble
 #include <WiFi.h>
 #include <ESPmDNS.h>    // v5.5.2: womo.local (Core-Bibliothek, kein lib_dep)
 #include "esp_sntp.h"   // v5.5.2: NTP über rohe SNTP-API (IDF 4.4)
@@ -234,8 +239,10 @@ static void on_ws_event(AsyncWebSocket* s, AsyncWebSocketClient* c,
 static String build_live_json() {
     char hdr[160];
     String tzab = clock_tz_abbr();
+    // v5.6.0: "type":"live" — Frame-Unterscheidung für BLE-Clients
+    // (resp/params/live auf einem Kanal). WS-Dashboard ignoriert das Feld.
     snprintf(hdr, sizeof(hdr),
-        "{\"ts\":%lu,\"epoch\":%lu,\"epoch_mez\":%lu,\"tz\":\"%s\",\"synced\":%s,",
+        "{\"type\":\"live\",\"ts\":%lu,\"epoch\":%lu,\"epoch_mez\":%lu,\"tz\":\"%s\",\"synced\":%s,",
         (unsigned long)(millis()/1000),
         (unsigned long)clock_now(),
         (unsigned long)clock_now_local(),
@@ -343,28 +350,13 @@ static void handle_params_post(AsyncWebServerRequest* req, uint8_t* data,
                                size_t len, size_t index, size_t total) {
     char* body = collect_body_chunk(req, data, len, index, total);
     if (!body) return;
-    StaticJsonDocument<512> doc;
-    if (deserializeJson(doc, body)) {
-        free(body);
-        req->send(400, "application/json", "{\"error\":\"JSON ungültig\"}");
-        return;
-    }
+    // v5.6.0: Anwendung + Validierung im gemeinsamen Pfad mit BLE
+    // ({"cmd":"params_set"}) — params_apply_json(), s. params.h.
+    // Semantik unverändert (nur bekannte Schlüssel, Setter-Grenzen).
+    bool ok = params_apply_json(body);
     free(body);
-    bool ok = true;
-    // v5.5: Parameterbereinigung — socDPlusHigh/pvThresholdOff/socGelHigh/
-    // socWROn entfallen, pvThresholdOn→pvDPlusMinW, socGelOff neu.
-    if (doc.containsKey("socDPlusOn"))          ok &= params_set_soc_dplus_on         (doc["socDPlusOn"]);
-    if (doc.containsKey("socDPlusOff"))         ok &= params_set_soc_dplus_off        (doc["socDPlusOff"]);
-    if (doc.containsKey("pvDPlusMinW"))         ok &= params_set_pv_dplus_min_w       (doc["pvDPlusMinW"]);
-    if (doc.containsKey("socGelOn"))            ok &= params_set_soc_gel_on           (doc["socGelOn"]);
-    if (doc.containsKey("socGelOff"))           ok &= params_set_soc_gel_off          (doc["socGelOff"]);
-    if (doc.containsKey("pvGelMinW"))           ok &= params_set_pv_gel_min_w         (doc["pvGelMinW"]);
-    if (doc.containsKey("socWROff"))            ok &= params_set_soc_wr_off           (doc["socWROff"]);
-    if (doc.containsKey("relayDebounceCycles")) ok &= params_set_relay_debounce_cycles(doc["relayDebounceCycles"]);
-    if (doc.containsKey("logIntervalMs"))       ok &= params_set_log_interval_ms      (doc["logIntervalMs"]);
-    if (doc.containsKey("manualTimeoutMin"))    ok &= params_set_manual_timeout_min   (doc["manualTimeoutMin"]);
     req->send(ok?200:400, "application/json",
-              ok?"{\"ok\":true}":"{\"error\":\"Wert außerhalb Grenzen\"}");
+              ok?"{\"ok\":true}":"{\"error\":\"JSON ungültig oder Wert außerhalb Grenzen\"}");
 }
 
 static void handle_reset(AsyncWebServerRequest* req) {
@@ -574,22 +566,27 @@ static void handle_levelcalib_post(AsyncWebServerRequest* req, uint8_t* data,
               ok?"{\"ok\":true}":"{\"error\":\"Keine gültige Messung zum Kalibrieren\"}");
 }
 
-static void handle_buffer(AsyncWebServerRequest* req) {
-    uint32_t offset = req->hasParam("offset") ? req->getParam("offset")->value().toInt() : 0;
-    uint32_t count  = req->hasParam("count")  ? req->getParam("count") ->value().toInt() : 900;
-    uint32_t step   = req->hasParam("step")   ? req->getParam("step")  ->value().toInt() : 1;
+// v5.6.1: Ringpuffer-Array-Builder — gemeinsamer Pfad für
+// GET /api/buffer (HTTP) und {"cmd":"buffer"} (BLE, s. P-SW21).
+// Baut das JSON-Array in PSRAM; Aufrufer übernimmt den Puffer
+// (free() bzw. send_psram_json via shared_ptr). Zeilenformat und
+// Clamps (count<=2000, step>=1) unverändert aus v5.4/H-3/F-18.
+// Rückgabe nullptr bei PSRAM-OOM.
+char* webserver_buffer_json(uint32_t offset, uint32_t count,
+                            uint32_t step, size_t* outLen) {
+    *outLen = 0;
     if (count > 2000) count = 2000;
     if (step  < 1)    step  = 1;
 
     LogEntry* entries = (LogEntry*)ps_malloc(count * sizeof(LogEntry));
-    if (!entries) { req->send(503,"application/json","{\"error\":\"OOM PSRAM\"}"); return; }
+    if (!entries) return nullptr;
     uint32_t n = logger_snapshot(offset, count, step, entries);
 
     // H-3: JSON komplett in PSRAM aufbauen (nicht in den Internal-RAM-Stream),
     // danach chunked streamen. ~240 B/Eintrag reichlich bemessen.
     size_t cap = (size_t)n * 240 + 16;
     char*  out = (char*)ps_malloc(cap);
-    if (!out) { free(entries); req->send(503,"application/json","{\"error\":\"OOM PSRAM\"}"); return; }
+    if (!out) { free(entries); return nullptr; }
 
     size_t off = 0;
     out[off++] = '[';
@@ -621,8 +618,19 @@ static void handle_buffer(AsyncWebServerRequest* req) {
     }
     free(entries);
     if (off + 2 <= cap) out[off++] = ']';
-    // Chunked aus PSRAM streamen; send_psram_json übernimmt free(out) via shared_ptr.
-    send_psram_json(req, out, off);
+    *outLen = off;
+    return out;
+}
+
+static void handle_buffer(AsyncWebServerRequest* req) {
+    uint32_t offset = req->hasParam("offset") ? req->getParam("offset")->value().toInt() : 0;
+    uint32_t count  = req->hasParam("count")  ? req->getParam("count") ->value().toInt() : 900;
+    uint32_t step   = req->hasParam("step")   ? req->getParam("step")  ->value().toInt() : 1;
+    size_t len = 0;
+    char* out = webserver_buffer_json(offset, count, step, &len);   // v5.6.1: gemeinsamer Builder
+    // Chunked aus PSRAM streamen; send_psram_json übernimmt free(out) via
+    // shared_ptr und deckt auch out==nullptr (OOM → 503) ab.
+    send_psram_json(req, out, len);
 }
 
 static void handle_sdfiles(AsyncWebServerRequest* req) {
@@ -725,6 +733,41 @@ static void handle_sddata(AsyncWebServerRequest* req) {
     send_psram_json(req, out, off);   // übernimmt free(out) via shared_ptr
 }
 
+// ── v5.6.0: Live-JSON für andere Module (BLE {"cmd":"live"}) ──
+String webserver_live_json() {
+    return build_live_json();
+}
+
+// ── v5.6.0: BLE-Schalter ──────────────────────────────────────
+// GET  /api/ble  → {"en":…,"active":…,"connected":…,"subscribed":…,"name":…}
+// POST /api/ble  {"en":0|1} → NVS setzen; bei Änderung deferred
+// Reboot über den sicheren OTA-Pfad (Ringpuffer-Sicherung). Der
+// Handler läuft im AsyncTCP-Task — ble_set_enabled schreibt nur
+// NVS, ota_schedule_reboot setzt nur ein Flag: beides zulässig.
+static void handle_ble_get(AsyncWebServerRequest* req) {
+    req->send(200, "application/json", ble_to_json());
+}
+static void handle_ble_post(AsyncWebServerRequest* req, uint8_t* data,
+                            size_t len, size_t index, size_t total) {
+    char* body = collect_body_chunk(req, data, len, index, total);
+    if (!body) return;
+    StaticJsonDocument<64> doc;
+    if (deserializeJson(doc, body) || !doc.containsKey("en")) {
+        free(body);
+        req->send(400, "application/json", "{\"error\":\"JSON ungültig\"}");
+        return;
+    }
+    bool en = doc["en"].as<int>() != 0;
+    free(body);
+    if (en == ble_enabled()) {                  // keine Änderung → kein Reboot
+        req->send(200, "application/json", "{\"ok\":true,\"reboot\":false}");
+        return;
+    }
+    ble_set_enabled(en);
+    ota_schedule_reboot(1500);                  // Antwort erst ausliefern lassen
+    req->send(200, "application/json", "{\"ok\":true,\"reboot\":true}");
+}
+
 void webserver_init() {
     if (!LittleFS.begin(true)) Serial.println("[WEB] LittleFS FEHLER!");
     else                        Serial.println("[WEB] LittleFS OK");
@@ -758,6 +801,9 @@ void webserver_init() {
     server.on("/api/reset",   HTTP_POST, handle_reset);
     server.on("/api/manual", HTTP_POST,
         post_empty_guard, nullptr, handle_manual_post);
+    server.on("/api/ble",     HTTP_GET,  handle_ble_get);      // v5.6.0
+    server.on("/api/ble", HTTP_POST,
+        post_empty_guard, nullptr, handle_ble_post);           // v5.6.0
     server.on("/api/buffer",  HTTP_GET,  handle_buffer);
     server.on("/api/sdfiles", HTTP_GET,  handle_sdfiles);
     server.on("/api/sddata",  HTTP_GET,  handle_sddata);
@@ -826,8 +872,16 @@ void webserver_broadcast() {
         }
     }
 
-    if (ws.count() == 0) return;
+    ble_tick();   // v5.6.0: BLE-RX-Kommandos ausführen + Antworten senden
+                  // (gleicher Kontext wie WS-Broadcast → ein Sende-Kontext)
+
+    // v5.6.0: JSON EINMAL bauen, an WS und BLE verteilen.
+    bool wantWs  = ws.count() > 0;
+    bool wantBle = ble_subscribed();
+    if (!wantWs && !wantBle) return;
     String json = build_live_json();
+    if (wantBle) ble_notify_live(json);
+    if (!wantWs) return;
 
     // H-1: ws.textAll() iteriert die Client-Liste UNTER dem internen
     // _ws_clients_lock (verifiziert im esp32async-Fork ^3.7.0, AsyncWebSocket.cpp:
