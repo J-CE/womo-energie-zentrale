@@ -575,16 +575,47 @@ P-SW07 | DATENSTRUKTUREN  [GEÄNDERT]
     Zeitzone: wählbarer POSIX-TZ-String (DST automatisch), Default
     Europe/Berlin; UTC intern, lokal nur Anzeige (siehe L-SW19).
 
-P-SW08 | JK-BMS PROTOKOLL-IMPLEMENTIERUNG  [GEÄNDERT]
+P-SW08 | JK-BMS PROTOKOLL-IMPLEMENTIERUNG  [GEÄNDERT v5.6.5]
   Query-Frame (21 Byte, Checksum 0x0129):
     4E 57 00 13 00 00 00 00 06 03 00 00 00 00 00 00 68 00 00 01 29
-  Antwort: SOF 4E 57, LEN (2 Byte), Daten..., 68, REC, CHK (2 Byte)
+  Frame-Aufbau (lt. offiziellem JK/JiKong-Protokoll, "Monitoring
+    Platform ↔ BMS"): STX(2)=4E57, LENGTH(2), Terminal-ID(4),
+    Command(1), Source(1), Type(1), Datenfeld(N), Record-Nr(4),
+    End-ID(1)=0x68, Checksum(4, davon High-2=CRC reserviert/0,
+    Low-2=kumulative Summenprüfung — s. verify_checksum()).
+  LENGTH-Feld = Gesamtlänge − 2 (deterministisch, KEIN Rätselwert)
+    → Framelänge flen = LEN + 2, genau EIN gültiger Kandidat.
+  Datenfeld-Ende (v5.6.5, deterministisch statt Bytewert-Suche):
+    endIdx = flen − 9 (Record-Nr 4 + End-ID 1 + Checksum 4),
+    zusätzlich Struktur-Check buf[endIdx+4]==0x68 (End-ID an der
+    berechneten Position, nicht per Inhaltssuche). Verifiziert am
+    Query-Frame: flen=21 → endIdx=12 → buf[16]=0x68 ✓.
+    [BUGFIX v5.6.5] Vorher: 3 Kandidaten-Längen (LEN+2/LEN+4/rx_len)
+    gegen Checksumme geprüft, dazu Bytewert-Suche nach 0x68 für das
+    Frame-Ende — beides konnte bei Pufferresten eines Vorgänger-
+    Frames zufällig eine falsche, aber checksummen-gültige Länge/
+    Position treffen und Byte-Fragmente aus Alt- und Neu-Frame als
+    ein Frame parsen → reproduzierbare Fantasiewerte (Strom/Leistung
+    etc.) OHNE Fehlerzählung. Betraf WLAN und BLE gleichermaßen, da
+    beide Kanäle aus derselben g_bms-Quelle (build_live_json())
+    gespeist werden.
   ID→Länge-Tabelle: Bekannte Identifier mit fixer Payload-Länge
     tabelliert → kein Parser-Desync bei unbekannten Feldern.
   0x79 (Zellspannungen): Wird empfangen aber nicht gespeichert (v5.0).
   Temperaturen 0x80–0x82: 1°C-Schritte; Werte > 100 = negativ.
-  Checksumme: 16-Bit (Summe & 0xFFFF, letzte 2 Byte).
-  Framelänge adaptiv: Kandidaten LEN+2, LEN+4 und rx_len geprüft.
+  Checksumme: Summe & 0xFFFF über alle Bytes vor dem Checksum-Feld,
+    verglichen mit dessen unteren 2 Byte (High-2 = CRC, unbenutzt).
+  Plausibilitätsprüfung (NEU v5.6.5): values_plausible() prüft
+    Spannung/Strom/SoC/Temperatur gegen BMS_PLAUSIBLE_*-Grenzen
+    (config.h) als zweite, vom Frame-Parsing unabhängige Schutz-
+    schicht — unplausible Frames werden verworfen (errorCount++,
+    g_bms bleibt auf letztem gültigem Stand), bevor sie den
+    Live-Zustand erreichen.
+  Atomare Übernahme (NEU v5.6.5): Werte werden in ein lokales
+    Snapshot geparst und nur bei synchronem UND plausiblem Frame
+    komplett nach g_bms übernommen — verhindert, dass ein mitten im
+    Frame abgebrochener Parse-Durchlauf bereits geschriebene
+    Einzelfelder als "letzten Stand" stehen lässt.
   Header-Resync: align_to_header() wirft Müll-Bytes vor 0x4E 0x57 weg.
   Strom-Kodierung: BMS_CURRENT_MODE/SCALE in config.h. + = LADEN.
   Staleness: millis() − lastUpdateMs < BMS_STALE_TIMEOUT_MS (60s).
@@ -592,8 +623,8 @@ P-SW08 | JK-BMS PROTOKOLL-IMPLEMENTIERUNG  [GEÄNDERT]
     rem, nom, mosfet-Status, frameCount, errorCount.
     Nicht mehr enthalten: Zellspannungen, Zyklen, Balancing, Alarmflags,
     Schutzparameter.
-  Roh-Frame-Logging: dump_frame() bei CHK-Fehler; BMS_DEBUG_RAW=1
-    für alle Frames. Byte-Offsets nach Erstbetrieb verifizieren!
+  Roh-Frame-Logging: dump_frame() bei CHK-/Struktur-Fehler;
+    BMS_DEBUG_RAW=1 für alle Frames.
 
 P-SW09 | VE.DIRECT PROTOKOLL-IMPLEMENTIERUNG  [GEÄNDERT]
   Text-Protokoll (Empfang, unverändert):
@@ -721,7 +752,7 @@ P-SW12 | WEBSERVER-ARCHITEKTUR
     registriert werden — sonst Fallthrough zu LittleFS, API-Aufrufe
     laufen ins Leere (404 statt JSON).
 
-P-SW13 | DASHBOARD (data/index.html)  [GEÄNDERT v5.4]
+P-SW13 | DASHBOARD (data/index.html)  [GEÄNDERT v5.6.5]
   Technologie: Reines HTML5/CSS3/JavaScript, keine externen Libraries.
   Tabs: Live | Verlauf | System | Lage | Einstellungen
   Kopf: Verbindungsstatus, Echtzeit-Uhr (lokale Zeitzone, DST), SD-Status,
@@ -738,7 +769,12 @@ P-SW13 | DASHBOARD (data/index.html)  [GEÄNDERT v5.4]
     - History-Graph aus /api/sddata (bis 2.000 Punkte)
   System-Tab:
     - 4 Aktor-Kacheln (Grund, Debounce, socHigh-Info)
-    - System-Status (Puffer, SD, Frame-/Fehlerzähler, Laufzeit)
+    - System-Status (WLAN(STA)-Status, Puffer, SD, Frame-/Fehlerzähler,
+      Laufzeit). WLAN-Zeile (NEU v5.6.5) zeigt SSID/IP/RSSI bzw.
+      "STA aus"/"gesucht" — Quelle ist dasselbe net-Objekt im Live-JSON
+      wie im Einstellungen-Tab (wifiNow), daher identisch über WLAN-
+      Dashboard UND BLE-App sichtbar (net.* wird von build_live_json()
+      transportunabhängig an WS und BLE geliefert, s. P-SW21).
     - Wechselrichter-Status-LED (Renogy NVS): dreistufig — aus (grau,
       Power-LED aus), grün (Power-LED an / "Ein"), rot (Alarm-LED an,
       Vorrang vor grün). Bei valid=false (vor erstem Poll / Mutex-
@@ -878,7 +914,7 @@ P-SW16 | BEKANNTE OFFENE PUNKTE (SOFTWARE)  [GEÄNDERT v5.4.1]
      gegen real untergelegte Keile plausibilisieren, Einbaudrehung
      (c_rot) ggf. an tatsächliche Sensor-Orientierung anpassen.
 
-P-SW17 | JK-BMS CAN-BUS-ALTERNATIVE (bmscan.h/.cpp)  [NEU v5.1]
+P-SW17 | JK-BMS CAN-BUS-ALTERNATIVE (bmscan.h/.cpp)  [GEÄNDERT v5.6.5]
   Zweck: Alternative Anbindung zum JK-BMS über CAN statt RS485, falls
   CAN bevorzugt oder RS485-Wiring nicht praktikabel ist. 100% aufruf-
   und antwortkompatibel zu bms.h — identische Struct BMSData,
@@ -904,6 +940,19 @@ P-SW17 | JK-BMS CAN-BUS-ALTERNATIVE (bmscan.h/.cpp)  [NEU v5.1]
   (AvgCellTemp ist der Wert, der per HEX-TX an den MPPT geht).
   Nicht im CAN-Protokoll enthalten → fest 0/false: nominalCapacityAh,
   remainingCapacityAh, chargeMOSFETEnabled, dischargeMOSFETEnabled.
+  Plausibilitätsprüfung (NEU v5.6.5, analog RS485-Variante P-SW08):
+    batt_plausible()/temp_plausible() prüfen BATT_ST bzw. CELL_TEMP
+    gegen dieselben BMS_PLAUSIBLE_*-Grenzen (config.h) VOR der
+    Übernahme nach g_bms — getrennt je Frame-Typ, da beide
+    unabhängig voneinander eintreffen. ACHTUNG Unterschied zur
+    RS485-Variante: der dortige Bug (Framelänge/-ende erraten,
+    dadurch Alt/Neu-Frame-Vermischung) existiert bei CAN NICHT — der
+    TWAI-Controller liefert bereits vollständige, hardware-CRC-
+    geprüfte Frames fester Länge (kein Byte-Strom zum Resyncen). Die
+    Plausibilitätsprüfung ist hier eine zusätzliche, unabhängig
+    sinnvolle zweite Schutzschicht (Busstörungen, seltene
+    undetektierte Mehrbit-Fehler), kein Bugfix für einen konkret
+    identifizierten CAN-Fehler.
   Auswahl (Compile-Zeit, beide Implementierungen bleiben im Repo):
     Standard-Build → bms.cpp aktiv (bmscan.cpp inaktiv via #ifdef
                      BMS_USE_CAN, keine Symbol-Kollision).

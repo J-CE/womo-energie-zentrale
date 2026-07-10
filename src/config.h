@@ -1,7 +1,14 @@
 // ============================================================
-//  config.h — Womo Energy Core v5.6.4
+//  config.h — Womo Energy Core v5.6.5
 //  Zielplattform: ESP32-S3 DevKitC-1 N16R8
 //
+//  v5.6.5: BMS-Frame-Parser (bms.cpp) auf deterministische Länge/
+//          Trailer-Position umgestellt (bisher: Kandidaten-Raten,
+//          fälschlich akzeptierte Alt/Neu-Frame-Gemische bei
+//          zufällig gültiger Checksumme → reproduzierbare
+//          BMS-Ausreißer ohne Fehlerzählung, WLAN wie BLE). Neue
+//          Plausibilitätsgrenzen BMS_PLAUSIBLE_* als zweite,
+//          unabhängige Schutzschicht. Siehe P-SW08.
 //  v5.6.4: BLE-TX-Chunkgröße hart auf 512 B gedeckelt (BLE_MAX_NOTIFY_LEN)
 //          statt MTU−3=514 B — Android kappt seit Android 13 empfangene
 //          Notify-Werte intern bei GATT_MAX_ATTR_LEN=512 B und verwirft
@@ -37,10 +44,10 @@
 
 #pragma once
 
-// ── Firmware-Version (v5.6.4) ────────────────────────────────
+// ── Firmware-Version (v5.6.5) ────────────────────────────────
 // Zentrale Quelle für Boot-Banner (main.cpp) und /api/ota.
 // Bei jedem Release NUR hier ändern (+ Datei-Kopfzeilen).
-#define FW_VERSION "5.6.4"
+#define FW_VERSION "5.6.5"
 
 // ============================================================
 //  BLOCK 1 — HARDWARE-KONSTANTEN
@@ -241,6 +248,18 @@
 
 // Staleness: BMS-Daten veraltet wenn > BMS_STALE_TIMEOUT_MS kein Frame
 #define BMS_STALE_TIMEOUT_MS        60000       // 60s (L-SW03/04/05)
+
+// Plausibilitätsgrenzen (v5.6.5) — zweite, vom Frame-Parsing unabhängige
+// Schutzschicht in bms.cpp::values_plausible(). Bewusst am Hardware-
+// Rahmen orientiert (nicht am normalen Betriebsfenster), damit reale
+// Extremzustände (Kaltstart, Tiefentladung) nicht fälschlich verworfen
+// werden — soll nur eindeutigen Unsinn (Frame-Desync/-Verwechslung)
+// abfangen, den Checksumme + Struktur-Check nicht erkennen.
+#define BMS_PLAUSIBLE_V_MIN           5.0f      // V  (4S LFP: nie sinnvoll darunter)
+#define BMS_PLAUSIBLE_V_MAX          20.0f      // V  (deutlich über 4S-LFP-Ladeschluss)
+#define BMS_PLAUSIBLE_I_MAX_A       400.0f      // A  (|Strom|; 280Ah-Zelle, reichlich Marge über 1C)
+#define BMS_PLAUSIBLE_T_MIN         -50.0f      // °C (jk_temp-Formel erlaubt rechnerisch mehr als sinnvoll)
+#define BMS_PLAUSIBLE_T_MAX         100.0f      // °C (Doku-Range 0x80-0x82: -40…100°C)
 
 // ── MPPT VE.Direct ───────────────────────────────────────────
 #define MPPT_FRAME_TIMEOUT_MS       3000        // Text-Protokoll Timeout

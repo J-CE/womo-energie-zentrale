@@ -1,6 +1,30 @@
 // ============================================================
-//  bms.cpp — Womo Energy Core v5.4
+//  bms.cpp — Womo Energy Core v5.6.5
 //  JK-BMS UART-Parser (4E-57-Frame, direkt per TTL am GPS-Port)
+//
+//  v5.6.5: Frame-Ende & -Länge deterministisch statt geraten
+//  (Grundlage: offizielles JK/JiKong-Protokoll-PDF, "Monitoring
+//  Platform ↔ BMS"). Bisher wurde die Framelänge über drei
+//  Kandidaten (LEN+2/LEN+4/rx_len) erraten — bei zufällig gültiger
+//  Checksumme auf einer FALSCHEN Kandidatenlänge (Reste eines
+//  Vorgänger-Frames im Puffer) wurden Byte-Fragmente aus Alt- und
+//  Neu-Frame als ein Frame geparst → reproduzierbare Fantasiewerte
+//  (z.B. Strom/Leistung) OHNE Fehlerzählung, da die Prüfsumme über
+//  die falsche Länge zufällig aufging.
+//  Fix: LEN-Feld ist lt. Doku exakt "Gesamtlänge − 2" → nur EIN
+//  gültiger Kandidat, kein Raten mehr. find_data_end()-Bytewert-
+//  Suche (0x68) entfällt ersatzlos — 0x68 kann als Nutzdaten-Byte
+//  auftreten und die Suche fehlleiten; der Trailer-Offset wird
+//  stattdessen aus der (bereits checksummen-validierten) Frame-
+//  länge fest berechnet: Record-Nr(4) + End-ID(1) + Checksum(4)
+//  = 9 Byte nach dem Datenfeld. End-ID-Byte wird zusätzlich an der
+//  erwarteten Position verifiziert (Strukturprüfung, kein Bytewert-
+//  Scan mehr).
+//  Zusätzlich: Werte werden in ein lokales Snapshot geparst und
+//  nur bei vollständig synchronem UND plausiblem Frame atomar nach
+//  g_bms übernommen (bisher konnten bei einem Abbruch mitten im
+//  Frame bereits geschriebene Einzelfelder als „letzter Stand"
+//  stehenbleiben). Plausibilitätsgrenzen s. config.h.
 //
 //  v5.4: GPIO_RS485_DE_RE (MAX485-Richtungssteuerung) entfernt —
 //  seit der Umstellung auf direkte TTL-Verdrahtung am GPS-Port
@@ -15,6 +39,7 @@
 #include "bms.h"
 #include "config.h"
 #include <HardwareSerial.h>
+#include <math.h>
 
 #ifndef BMS_DEBUG_RAW
 #define BMS_DEBUG_RAW 0
@@ -114,25 +139,58 @@ static void note_error() {
     }
 }
 
-static int find_data_end(const uint8_t* buf, uint16_t len) {
-    if (len >= 20 && buf[len-5] == 0x68) return len-5-4;
-    if (len >= 20 && buf[len-7] == 0x68) return len-7;
-    for (int i = (int)len-5; i >= 11; i--)
-        if (buf[i] == 0x68) return i;
-    return -1;
+// Prüft, ob ein Wertesatz physikalisch plausibel ist, BEVOR er nach
+// g_bms übernommen wird. Fängt Frames ab, die trotz gültiger
+// Prüfsumme (falsche Kandidatenlänge, Bitfehler o.ä.) Unsinn enthalten.
+// Grenzen bewusst großzügig (Hardware-Rahmen, nicht Betriebsfenster) —
+// s. config.h BMS_PLAUSIBLE_*.
+static bool values_plausible(float v, float i, uint8_t soc,
+                              float tMos, float tS1, float tS2) {
+    if (v    < BMS_PLAUSIBLE_V_MIN    || v    > BMS_PLAUSIBLE_V_MAX)    return false;
+    if (fabsf(i) > BMS_PLAUSIBLE_I_MAX_A)                               return false;
+    if (soc  > 100)                                                     return false;
+    if (tMos < BMS_PLAUSIBLE_T_MIN || tMos > BMS_PLAUSIBLE_T_MAX)       return false;
+    if (tS1  < BMS_PLAUSIBLE_T_MIN || tS1  > BMS_PLAUSIBLE_T_MAX)       return false;
+    if (tS2  < BMS_PLAUSIBLE_T_MIN || tS2  > BMS_PLAUSIBLE_T_MAX)       return false;
+    return true;
 }
 
 static bool parse_frame(const uint8_t* buf, uint16_t len) {
+    // Trailer lt. Protokoll-PDF (Kap. 4.2, Tab. 1): nach dem Datenfeld
+    // folgen deterministisch Record-Nr(4) + End-ID(1)=0x68 + Checksum(4)
+    // = 9 Byte. endIdx = Ende des Datenfelds (exklusiv), Datenfeld
+    // beginnt bei Offset 11 (STX2+LEN2+TerminalID4+CMD1+SRC1+TYPE1).
+    // Verifiziert am Query-Frame (BMS_QUERY, 21 B, LEN=0x0013):
+    // endIdx=21-9=12, End-ID an Index 12+4=16 → rx_buf[16]==0x68. ✓
     if (len < 20) return false;
-    int endIdx = find_data_end(buf, len);
-    if (endIdx < 11) { Serial.println("[BMS] Frame-Ende nicht gefunden"); return false; }
-    if (xSemaphoreTake(g_bmsMutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
+    int endIdx = (int)len - 9;
+    if (endIdx < 11) { Serial.println("[BMS] Frame zu kurz (Trailer)"); return false; }
+    if (buf[endIdx + 4] != 0x68) {
+        // Strukturprüfung statt Bytewert-Suche: End-ID nicht an der
+        // erwarteten, aus der validierten Framelänge berechneten
+        // Position → Frame verwerfen statt raten.
+        Serial.println("[BMS] End-ID (0x68) an falscher Position — Frame verworfen");
+        note_error();
+        return false;
+    }
 
     const uint8_t* data = &buf[11];
     int dlen = endIdx - 11;
     int pos  = 0;
     bool desync = false;
     int  bad_id = -1;   // K-1: Serial-Ausgabe NICHT unter g_bmsMutex — hier nur merken
+
+    // Lokales Snapshot: erst bei vollständig synchronem & plausiblem
+    // Frame atomar nach g_bms übernehmen. Nicht in diesem Frame
+    // enthaltene Felder bleiben (wie bisher) auf dem letzten Stand —
+    // dafür mit den aktuellen g_bms-Werten vorbelegt.
+    if (xSemaphoreTake(g_bmsMutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
+    float   nV = g_bms.totalVoltage, nI = g_bms.current;
+    float   nTMos = g_bms.tempMOS, nTS1 = g_bms.tempSensor1, nTS2 = g_bms.tempSensor2;
+    float   nNom = g_bms.nominalCapacityAh;
+    uint8_t nSoc = g_bms.soc;
+    bool    nChg = g_bms.chargeMOSFETEnabled, nDis = g_bms.dischargeMOSFETEnabled;
+    xSemaphoreGive(g_bmsMutex);
 
     while (pos < dlen) {
         uint8_t id = data[pos++];
@@ -154,48 +212,59 @@ static bool parse_frame(const uint8_t* buf, uint16_t len) {
         }
 
         switch (id) {
-        case 0x80: g_bms.tempMOS     = jk_temp(read_u16(&data[pos])); break;
-        case 0x81: g_bms.tempSensor1 = jk_temp(read_u16(&data[pos])); break;
-        case 0x82: g_bms.tempSensor2 = jk_temp(read_u16(&data[pos])); break;
-        case 0x83: g_bms.totalVoltage = read_u16(&data[pos]) * 0.01f; break;
-        case 0x84: g_bms.current      = jk_current(read_u16(&data[pos])); break;
-        case 0x85: g_bms.soc          = data[pos]; break;
+        case 0x80: nTMos = jk_temp(read_u16(&data[pos])); break;
+        case 0x81: nTS1  = jk_temp(read_u16(&data[pos])); break;
+        case 0x82: nTS2  = jk_temp(read_u16(&data[pos])); break;
+        case 0x83: nV    = read_u16(&data[pos]) * 0.01f; break;
+        case 0x84: nI    = jk_current(read_u16(&data[pos])); break;
+        case 0x85: nSoc  = data[pos]; break;
         case 0x8C: {  // MOSFET-Status (Bits 0+1)
             uint16_t st = read_u16(&data[pos]);
-            g_bms.chargeMOSFETEnabled    = (st & 0x01) != 0;
-            g_bms.dischargeMOSFETEnabled = (st & 0x02) != 0;
+            nChg = (st & 0x01) != 0;
+            nDis = (st & 0x02) != 0;
             break;
         }
-        case 0xAA: g_bms.nominalCapacityAh = (float)read_u32(&data[pos]); break; // Einheit: Ah direkt (Doku: "4 HEX AH")
+        case 0xAA: nNom = (float)read_u32(&data[pos]); break; // Einheit: Ah direkt (Doku: "4 HEX AH")
         default: break; // bekannte Länge, hier nicht ausgewertet
         }
         pos += plen;
     }
 
+    bool plausible = !desync && values_plausible(nV, nI, nSoc, nTMos, nTS1, nTS2);
+
+    if (xSemaphoreTake(g_bmsMutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
     g_bms.frameCount++;
-    if (desync) {
-        // M-6: Desynchronisierter Frame → NICHT als frisch & gültig führen.
-        // Die Prüfsumme war ok (Bytes intakt), aber die TLV-Kette brach ab
-        // (unbekannte ID / Längenüberlauf) → Felder VOR dem Abbruch könnten
-        // bei fehlerhafter Längentabelle fehlinterpretiert worden sein.
-        // valid/lastUpdateMs bleiben unverändert → die Staleness-Prüfung in der
-        // Logik greift, statt potenziell falsche Werte als „gültig" zu behandeln.
-        // Ein einzelner Desync zwischen guten Frames kostet keine Frische
-        // (gute Frames setzen lastUpdateMs); dauerhafte Desyncs führen sauber
-        // in den Stale-Zustand (bms_ok=false → Fail-Safe).
+    if (!plausible) {
+        // M-6 (erweitert v5.6.5): Desynchronisierter ODER unplausibler
+        // Frame → NICHT übernehmen. g_bms bleibt auf dem letzten guten
+        // Stand; valid/lastUpdateMs bleiben unverändert → die Staleness-
+        // Prüfung in der Logik greift, statt Fantasiewerte als „gültig"
+        // zu behandeln. Ein einzelner Ausreißer zwischen guten Frames
+        // kostet keine Frische (gute Frames setzen lastUpdateMs);
+        // dauerhafte Fehler führen sauber in den Stale-Zustand
+        // (bms_ok=false → Fail-Safe).
         g_bms.errorCount++;
     } else {
+        g_bms.tempMOS = nTMos; g_bms.tempSensor1 = nTS1; g_bms.tempSensor2 = nTS2;
+        g_bms.totalVoltage = nV; g_bms.current = nI;
+        g_bms.soc = nSoc; g_bms.nominalCapacityAh = nNom;
+        g_bms.chargeMOSFETEnabled = nChg; g_bms.dischargeMOSFETEnabled = nDis;
         g_bms.power = g_bms.totalVoltage * g_bms.current;
         g_bms.remainingCapacityAh = g_bms.nominalCapacityAh * (float)g_bms.soc / 100.0f;
         g_bms.valid        = true;
         g_bms.lastUpdateMs = millis();
     }
-
     xSemaphoreGive(g_bmsMutex);
+
     // K-1: erst NACH Freigabe loggen — Serial (USB-CDC) könnte blockieren.
     if (bad_id >= 0)
         Serial.printf("[BMS] Unbekannte/korrupte ID 0x%02X — Rest verworfen\n",
                       (unsigned)bad_id);
+    else if (desync)
+        Serial.println("[BMS] Frame-Desync (Längenüberlauf) — Rest verworfen");
+    else if (!plausible)
+        Serial.printf("[BMS] Unplausibler Frame verworfen (V=%.2f I=%.2f SoC=%u "
+                      "tMOS=%.1f tS1=%.1f tS2=%.1f)\n", nV, nI, nSoc, nTMos, nTS1, nTS2);
     return true;
 }
 
@@ -252,15 +321,15 @@ bool bms_poll() {
     dump_frame(rx_buf, rx_len);
 #endif
 
-    uint16_t lf = ((uint16_t)rx_buf[2]<<8)|rx_buf[3];
-    uint16_t candidates[3] = { (uint16_t)(lf+2), (uint16_t)(lf+4), rx_len };
-    uint16_t flen = 0;
-    for (uint8_t i = 0; i < 3; i++) {
-        uint16_t c = candidates[i];
-        if (c >= 20 && c <= rx_len && verify_checksum(rx_buf, c)) { flen = c; break; }
-    }
-    if (flen == 0) {
-        Serial.println("[BMS] Checksum FEHLER");
+    // v5.6.5: LEN-Feld ist lt. Protokoll-PDF exakt "Gesamtlänge − 2"
+    // (Kap. 4.2.2) → GENAU EIN gültiger Kandidat, kein Raten mehr.
+    // Bytes über flen hinaus (Rest/nächstes Frame im Puffer) werden
+    // nicht mit einbezogen — verhindert das Vermischen von Alt- und
+    // Neu-Frame-Fragmenten bei zufällig passender Fallback-Checksumme.
+    uint16_t lf   = ((uint16_t)rx_buf[2]<<8)|rx_buf[3];
+    uint16_t flen = (uint16_t)(lf + 2);
+    if (flen < 20 || flen > rx_len || !verify_checksum(rx_buf, flen)) {
+        Serial.println("[BMS] Checksum/Länge FEHLER");
         dump_frame(rx_buf, rx_len);
         note_error(); return false;
     }
