@@ -1,5 +1,7 @@
 // ============================================================
-//  main.cpp — Womo Energy Core v5.5
+//  main.cpp — Womo Energy Core v5.6.0
+//  v5.6.0: BLE-Init (ble_init nach webserver_init). Der 2s-Tick
+//  in webserver_broadcast() bedient WS UND BLE (http_server.cpp).
 //
 //  Watchdog (zweistufig):
 //   • HW-WDT (esp_task_wdt, 4s) überwacht loop() → harter Reboot
@@ -9,7 +11,7 @@
 //   Core 1 | Prio 4: logic_task    (BMS poll + Logik, alle 2s)
 //   Core 1 | Prio 3: mppt_task     (VE.Direct lesen + HEX-TX Temp)
 //   Core 0 | Prio 2: logger_task   (SD flush, alle 5s)
-//   Core 0 | Prio 2: ws_task       (WebSocket broadcast, alle 2s)
+//   Core 0 | Prio 2: ws_task       (WS+BLE broadcast/tick, alle 2s)
 //   Core 0 | Prio 1: watchdog_task (watchdog.cpp)
 // ============================================================
 
@@ -28,6 +30,7 @@
 #include "clock.h"
 #include "level.h"
 #include "ota.h"
+#include "ble.h"
 
 static TaskHandle_t h_logic  = nullptr;
 static TaskHandle_t h_mppt   = nullptr;
@@ -139,6 +142,7 @@ void setup() {
     clock_init();
     level_init();         // Lagesensor (optional) — nach clock_init: Wire + g_i2cMutex bereit
     webserver_init();
+    ble_init();           // v5.6.0: BLE GATT-Server (NUS) — falls NVS ble/en=1
     ota_init();           // Boot-Diagnose: laufende/nächste OTA-Partition loggen
 
     // F-01: Rückgabe jeder Task-Erzeugung prüfen. Alle Creates werden versucht
@@ -147,7 +151,9 @@ void setup() {
     tasks_ok &= start_task(xTaskCreatePinnedToCore(logic_task,  "logic",  8192, nullptr, 4, &h_logic,  1), "logic");
     tasks_ok &= start_task(xTaskCreatePinnedToCore(mppt_task,   "mppt",   4096, nullptr, 3, &h_mppt,   1), "mppt");
     tasks_ok &= start_task(xTaskCreatePinnedToCore(logger_task, "logger", 6144, nullptr, 2, &h_logger, 0), "logger");  // K-4: SD-Aufrufkette tief
-    tasks_ok &= start_task(xTaskCreatePinnedToCore(ws_task,     "ws",     4096, nullptr, 2, &h_ws,     0), "ws");
+    // v5.6.0: ws-Stack 4096→6144 — ble_tick() läuft im ws_task und legt
+    // StaticJsonDocument<512> + Zeilenpuffer (256 B) auf den Stack.
+    tasks_ok &= start_task(xTaskCreatePinnedToCore(ws_task,     "ws",     6144, nullptr, 2, &h_ws,     0), "ws");
     tasks_ok &= start_task(xTaskCreatePinnedToCore(level_task,  "level",  4096, nullptr, 1, &h_level,  0), "level");
     if (!tasks_ok)
         Serial.println("[MAIN] WARNUNG: Nicht alle Tasks gestartet — System läuft eingeschränkt.");

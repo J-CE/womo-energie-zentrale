@@ -1,9 +1,13 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     index.html — Womo Energy Core v5.5.3
+     index.html — Womo Energy Core v5.6.5
      Dashboard: BMS · MPPT · Schaltlogik · Logging · Parameter · Zeitzone
      Eingebettet in LittleFS, erreichbar via http://192.168.4.1
      WLAN AP: GODMODULE (Passwort: BM-hy678)
+
+     v5.6.5: System-Status-Karte zeigt WLAN(STA)-Verbindung jetzt auch
+     bei BLE-Anbindung an (net.* kommt bereits transportunabhängig aus
+     build_live_json() — reine Anzeige-Ergänzung, kein Firmware-Bezug).
      ============================================================ -->
 <html lang="de">
 <head>
@@ -152,7 +156,7 @@
 <header>
   <div class="brand">
     <div class="logo">G</div>
-    <div><h1>GODMODULE · Energy Core</h1><div class="sub">Womo Energy Core v5.5.3</div></div>
+    <div><h1>GODMODULE · Energy Core</h1><div class="sub">Womo Energy Core v5.6.5</div></div>
   </div>
   <div class="pills">
     <span class="pill"><span id="dWs" class="dot"></span><span id="tWs">Verbinde…</span></span>
@@ -300,6 +304,7 @@
       <div class="card inv">
         <div class="ch"><h2>System-Status</h2><span class="badge">Diagnose</span></div>
         <div class="kv">
+          <span class="k">WLAN (STA)</span><span class="v" id="sWlan">–</span>
           <span class="k">Ringpuffer-Einträge</span><span class="v" id="sBuf">–</span>
           <span class="k">SD-Karte</span><span class="v" id="sSd">–</span>
           <span class="k">BMS Frames / Fehler</span><span class="v"><span id="sBfc">–</span> / <span id="sBec">–</span></span>
@@ -502,11 +507,27 @@
         </div>
       </div>
     </div>
+
+    <!-- v5.6.0: Bluetooth (BLE) -->
+    <div class="card">
+      <div class="ch"><h2>Bluetooth (BLE)</h2><span class="badge">NUS · Passkey-Pairing</span></div>
+      <div class="params">
+        <div class="field"><label>Status</label>
+          <div class="hint">GATT-Server &bdquo;WomoEnergy&ldquo; f&uuml;r die App: Live-Daten alle 2&nbsp;s + Kommandos. Beim ersten Verbinden fragt das Handy den Passkey ab (secrets.h).</div>
+          <div class="ip"><span class="curval" id="bleNow">&ndash;</span></div></div>
+        <div class="field"><label>BLE ein-/ausschalten</label>
+          <div class="hint">&Auml;nderung startet das Modul neu (~10&nbsp;s, Ringpuffer wird gesichert). Aus = spart ca. 70&ndash;90&nbsp;KB Heap.</div>
+          <div class="ip"><select id="bleEn">
+            <option value="1">An (Standard)</option>
+            <option value="0">Aus</option>
+          </select><button type="button" class="btn primary" id="bleSaveBtn">Speichern</button></div></div>
+      </div>
+    </div>
   </section>
 </main>
 
 <div id="toast"></div>
-<div class="foot">GODMODULE · Energy Core v5.5.3 · WLAN: GODMODULE · http://192.168.4.1 · <span id="footTz">MEZ</span></div>
+<div class="foot">GODMODULE · Energy Core v5.6.5 · WLAN: GODMODULE · http://192.168.4.1 · <span id="footTz">MEZ</span></div>
 
 <script>
 "use strict";
@@ -523,7 +544,7 @@ document.querySelectorAll("nav.tabs button").forEach(b=>{b.onclick=()=>{
   if(b.dataset.view==="live")loadLive();
   if(b.dataset.view==="hist")loadSdFiles();
   if(b.dataset.view==="sys")loadOta();
-  if(b.dataset.view==="cfg"){if(!paramsLoaded)loadParams();loadTz();loadWifi();}
+  if(b.dataset.view==="cfg"){if(!paramsLoaded)loadParams();loadTz();loadWifi();loadBle();}
   setLevelPolling(b.dataset.view==="lage");
   if(b.dataset.view==="lage")loadLevelCfg();
 };});
@@ -624,11 +645,16 @@ function render(D){
     }
   }
   const net=D.net;const wn=$("wifiNow");
-  if(net&&wn){
-    wn.textContent = !net.sta_en ? "STA aus · reiner AP-Betrieb"
-      : net.sta ? `verbunden · ${net.ssid||"?"} · ${net.ip||"?"} · ${net.rssi||0} dBm`
-      : "gesucht · kein bekanntes Netz in Reichweite";
-  }
+  // net.* kommt identisch über WS UND BLE (build_live_json() liefert
+  // beide Kanäle aus derselben Quelle) — diese Anzeige funktioniert
+  // daher transportunabhängig, auch wenn das Dashboard per BLE-Bridge
+  // (ohne eigene WLAN-Verbindung des Endgeräts) geladen wurde.
+  const wlanTxt = !net ? "–"
+    : !net.sta_en ? "STA aus · reiner AP-Betrieb"
+    : net.sta ? `verbunden · ${net.ssid||"?"} · ${net.ip||"?"} · ${net.rssi||0} dBm`
+    : "gesucht · kein bekanntes Netz in Reichweite";
+  const sw=$("sWlan"); if(sw) sw.textContent = wlanTxt;
+  if(net&&wn){ wn.textContent = wlanTxt; }
   const nt=$("ntpNow");
   if(nt){
     if(net&&net.ntp>1704067200){
@@ -857,6 +883,25 @@ async function saveWifiSlot(slot){
   }catch(_){toast("Speichern fehlgeschlagen","bad");}finally{btn.disabled=false;}
 }
 for(let i=1;i<=3;i++)$("wifiSave"+i).onclick=()=>saveWifiSlot(i);
+
+/* ---- Bluetooth BLE (v5.6.0) ---- */
+async function loadBle(){
+  try{const r=await fetch("/api/ble",{cache:"no-store"});const b=await r.json();
+    $("bleEn").value=b.en?"1":"0";
+    $("bleNow").textContent=!b.en?"aus":!b.active?"an (inaktiv \u2014 Init-Fehler?)"
+      :b.connected?(b.subscribed?"verbunden \u00b7 Live-Push aktiv":"verbunden \u00b7 kein Abo")
+      :"an \u00b7 wartet auf Verbindung (Advertising)";
+  }catch(_){$("bleNow").textContent="\u2013";}
+}
+$("bleSaveBtn").onclick=async()=>{
+  const en=$("bleEn").value==="1"?1:0;
+  const btn=$("bleSaveBtn");btn.disabled=true;
+  try{const r=await fetch("/api/ble",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({en})});
+    const res=await r.json();
+    if(r.ok&&res.ok){toast(res.reboot?"Gespeichert \u2014 Modul startet neu \u2026":"Keine \u00c4nderung","ok");if(res.reboot)setTimeout(loadBle,12000);}
+    else toast(res.error||"Fehler","bad");
+  }catch(_){toast("Speichern fehlgeschlagen","bad");}finally{btn.disabled=false;}
+};
 
 /* ---- Web-OTA (v5.4.1) ---- */
 async function loadOta(){

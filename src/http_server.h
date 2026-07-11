@@ -1,5 +1,5 @@
 // ============================================================
-//  http_server.h — Womo Energy Core v5.5.1
+//  http_server.h — Womo Energy Core v5.6.1
 //  AsyncWebServer-Interface: REST-API + WebSocket-Broadcast
 //
 //  Endpunkte:
@@ -20,6 +20,8 @@
 //    GET  /api/levelcfg   Lagesensor-Konfiguration
 //    POST /api/levelcfg   Lagesensor-Konfiguration setzen
 //    POST /api/levelcalib Lagesensor kalibrieren (Null-Offset setzen/löschen)
+//    GET  /api/ble       BLE-Status (en/active/connected/…)   (v5.6.0)
+//    POST /api/ble       BLE ein-/ausschalten {"en":0|1} → Reboot (v5.6.0)
 //    GET  /api/ota       OTA-Info (Version, Partition, Größen) (v5.4.1)
 //    POST /api/ota       Web-OTA-Upload: ?type=fw|fs (Firmware/Dashboard)
 //    WS   /ws            Push alle 2s
@@ -29,3 +31,13 @@
 
 void webserver_init();
 void webserver_broadcast();
+
+// v5.6.0: Live-JSON (identisch zum WS-Broadcast, inkl. "type":"live")
+// für andere Module — konkret BLE {"cmd":"live"} (ble.cpp).
+String webserver_live_json();
+
+// v5.6.1: Ringpuffer als JSON-Array (Format/Clamps identisch
+// GET /api/buffer) in PSRAM — Aufrufer übernimmt den Puffer
+// (free()). nullptr bei OOM. Genutzt von HTTP und BLE "buffer".
+char* webserver_buffer_json(uint32_t offset, uint32_t count,
+                            uint32_t step, size_t* outLen);
