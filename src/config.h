@@ -47,7 +47,7 @@
 // ── Firmware-Version (v5.6.5) ────────────────────────────────
 // Zentrale Quelle für Boot-Banner (main.cpp) und /api/ota.
 // Bei jedem Release NUR hier ändern (+ Datei-Kopfzeilen).
-#define FW_VERSION "5.6.5"
+#define FW_VERSION "5.6.6"
 
 // ============================================================
 //  BLOCK 1 — HARDWARE-KONSTANTEN

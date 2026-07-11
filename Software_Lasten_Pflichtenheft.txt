@@ -1,6 +1,6 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║     LASTEN- UND PFLICHTENHEFT — SOFTWARE                        ║
-║     Womo Energy Core v5.6.4                                      ║
+║     Womo Energy Core v5.6.6                                      ║
 ║     Stand: Schaltkriterien-Redesign (nur harte AUS-Bedingungen, ║
 ║            Float-Erkennung, WR nur manuell EIN) + D+-Pegel-Fix  ║
 ║            (Active-HIGH) + Lagesensor Überkopf-Einbau/Fehler-   ║
@@ -12,6 +12,7 @@
 ║            + BLE-Historie: "buffer"-Kommando (v5.6.1)           ║
 ║            + BLE-TX rc-geprüft + "level"-Kommando (v5.6.3)      ║
 ║            + BLE-Chunkgröße auf Android-512B-Limit (v5.6.4)     ║
+║            + WLAN-Rescan-Backoff/AP-Schutz (v5.6.6)             ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -161,11 +162,21 @@ L-SW10 | WEBINTERFACE — ZUGANG  [GEÄNDERT v5.5.2]          [MUSS]
   beim ersten Boot nach Slot 1). Bei >1 konfiguriertem Netz wählt
   ein ASYNCHRONER Scan das stärkste bekannte Netz (Auswertung im
   ws_task, vollständig non-blocking, AP bleibt aktiv); solange
-  getrennt, Rescan alle 60s (Heimkehr/Roaming). Bei genau einem
-  Netz Direktverbindung mit Arduino-AutoReconnect (Verhalten wie
-  bis v5.5). Bewusst KEINE Arduino-WiFiMulti-Klasse: deren
+  getrennt, Rescan zunächst alle 60s (Heimkehr/Roaming). Bei genau
+  einem Netz Direktverbindung mit Arduino-AutoReconnect (Verhalten
+  wie bis v5.5). Bewusst KEINE Arduino-WiFiMulti-Klasse: deren
   blockierendes run() verträgt sich nicht mit dem AP+STA-Dualmodus
   und der bestehenden Reconnect-Strategie.
+  Rescan-Backoff + AP-Schutz (v5.6.6): Da AP+STA nur EIN Funkmodul
+  teilen, verlässt ein Aktiv-Scan kurzzeitig den AP-Kanal — bei
+  dauerhaft fehlendem Heimnetz störte das bisher minütlich
+  verbundene AP-Clients (Dashboard). Gegenmaßnahmen: (1) das
+  Rescan-Intervall verdoppelt sich nach jedem erfolglosen Scan bis
+  zu einem Deckel von 15 Minuten und wird zurückgesetzt, sobald
+  wieder ein bekanntes Netz gefunden wird; (2) ein fälliger Scan
+  wird zurückgestellt, solange mindestens ein Client am AP hängt
+  (WiFi.softAPgetStationNum() > 0), und stattdessen alle 5s erneut
+  geprüft.
   Alle Slots leer = reiner AP-Betrieb.
   Passwörter werden über die API nie zurückgegeben.
 
@@ -1283,6 +1294,34 @@ P-SW21 | BLE GATT-SERVER (ble.h/.cpp)  [NEU v5.6.0, GEÄNDERT v5.6.4]
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ÄNDERUNGSPROTOKOLL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+─── v5.6.5 → v5.6.6 ─────────────────────────────────────────────
+
+  WLAN-INSTABILITÄT OHNE HEIMNETZ (Symptom: Dashboard/AP-Verbindung
+  wird unruhig, wenn kein konfiguriertes Heimnetz erreichbar ist,
+  aber >1 Slot belegt):
+  • Ursache: ESP32-S3 hat nur ein Funkmodul. Der asynchrone
+    Multi-SSID-Scan (wifi_tick) verlässt für die Scan-Dauer den
+    AP-Kanal, um alle Kanäle abzusuchen — das trennt kurzzeitig am
+    AP verbundene Clients (Handy/Dashboard). War kein bekanntes
+    Netz in Reichweite, lief der Scan unverändert alle 60s weiter
+    → wiederkehrende Aussetzer, solange das WoMo ohne Heimnetz
+    steht. Bei genau 1 Slot trat der Effekt nicht auf (kein Scan,
+    nur passives AutoReconnect). [L-SW10]
+  • Fix 1 — Backoff: s_staRescanIntervalMs (NEU) verdoppelt sich
+    nach jedem erfolglosen Scan (60s → … → Deckel
+    WIFI_RESCAN_INTERVAL_MAX_MS = 900s) und wird auf die Basis
+    zurückgesetzt, sobald ein bekanntes Netz gefunden wird oder die
+    STA-Konfiguration neu angewendet wird (wifi_apply_sta).
+  • Fix 2 — AP-Schutz: Ein fälliger Rescan wird zurückgestellt,
+    solange WiFi.softAPgetStationNum() > 0 ist (WIFI_AP_SCAN_DEFER_MS
+    = 5s Prüfintervall), statt eine aktive Dashboard-Session zu
+    stören. Der Backoff-Timer selbst läuft dabei unverändert weiter.
+  • Kein API-/Protokolländerung, keine NVS-Migration nötig.
+  • HINWEIS: Änderungsprotokoll-Einträge für v5.6.3/v5.6.4/v5.6.5
+    fehlen unterhalb dieses Eintrags (nur im Kopf-Banner benannt) —
+    Doku-Lücke aus dem Feature-Branch-Merge, nicht durch diese
+    Änderung verursacht. Sollte bei Gelegenheit nachgetragen werden.
 
 ─── v5.6.1 → v5.6.2 ─────────────────────────────────────────────
 
