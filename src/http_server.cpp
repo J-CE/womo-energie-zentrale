@@ -824,6 +824,14 @@ void webserver_init() {
     }
     WiFi.onEvent(on_wifi_event);
     WiFi.mode(WIFI_AP_STA);          // AP dauerhaft + optional STA (Heimnetz)
+    // v5.6.7: DHCP-Hostname für die STA-Seite — die Zentrale erscheint im
+    // Router (FRITZ!Box) als "womo" statt als anonymes espressif-Gerät.
+    // Reihenfolge zwingend NACH WiFi.mode() (STA-netif existiert erst dann)
+    // und VOR dem ersten WiFi.begin() aus wifi_apply_sta(); der Name haftet
+    // am STA-netif und übersteht so auch die Reconnects/Rescan-begin()s im
+    // wifi_tick() — das netif wird im Betrieb nie neu angelegt (Mode bleibt
+    // fix AP_STA, disconnect() lässt es bestehen). Core-2.x-konform.
+    WiFi.setHostname(MDNS_HOSTNAME);
     WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD, WIFI_AP_CHANNEL, 0, WIFI_AP_MAX_CLIENTS);
     Serial.printf("[WEB] AP: %s  IP: %s\n", WIFI_AP_SSID, WiFi.softAPIP().toString().c_str());
     wifi_apply_sta();                // STA aus NVS starten (falls SSID gesetzt)

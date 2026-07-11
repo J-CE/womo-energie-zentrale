@@ -1,7 +1,19 @@
 // ============================================================
-//  config.h — Womo Energy Core v5.6.5
+//  config.h — Womo Energy Core v5.6.7
 //  Zielplattform: ESP32-S3 DevKitC-1 N16R8
 //
+//  v5.6.7: (1) Lage-Anzeige im Web-Dashboard flackerte in WLAN alle 2 s
+//          kurz in die Mitte/grau — der Live-Frame-Renderpfad rief
+//          renderLevel(D.level) auf, obwohl build_live_json() kein
+//          level-Feld führt (D.level immer undefined → lvResetView).
+//          Verwaiste Zeile entfernt; die Lage-Anzeige gehört allein
+//          dem 250-ms-/api/level-Poll. Siehe P-SW21/L-SW24.
+//          (2) WiFi.setHostname(MDNS_HOSTNAME) vor softAP/STA-Start —
+//          DHCP-Hostname, damit die Zentrale in der FRITZ!Box als
+//          "womo" statt als anonymes ESP-Gerät erscheint. Siehe P-SW20.
+//  v5.6.6: WLAN-Rescan-Backoff exponentiell + AP-Client-schonender
+//          Scan-Aufschub (http_server.cpp) — Stabilität, wenn dauerhaft
+//          kein Heimnetz erreichbar ist. (Changelog-Kopf nachgetragen.)
 //  v5.6.5: BMS-Frame-Parser (bms.cpp) auf deterministische Länge/
 //          Trailer-Position umgestellt (bisher: Kandidaten-Raten,
 //          fälschlich akzeptierte Alt/Neu-Frame-Gemische bei
@@ -44,10 +56,10 @@
 
 #pragma once
 
-// ── Firmware-Version (v5.6.5) ────────────────────────────────
+// ── Firmware-Version (v5.6.7) ────────────────────────────────
 // Zentrale Quelle für Boot-Banner (main.cpp) und /api/ota.
 // Bei jedem Release NUR hier ändern (+ Datei-Kopfzeilen).
-#define FW_VERSION "5.6.6"
+#define FW_VERSION "5.6.7"
 
 // ============================================================
 //  BLOCK 1 — HARDWARE-KONSTANTEN

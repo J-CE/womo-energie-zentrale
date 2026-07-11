@@ -1,4 +1,4 @@
-# Womo Energy Core v5.6.6
+# Womo Energy Core v5.6.7
 
 Eigenentwickeltes Energiemanagement-System für ein Wohnmobil, basierend auf einem ESP32-S3. Überwacht BMS und MPPT-Laderegler, steuert Verbraucher/Lader automatisch nach Ladezustand und Solarleistung, loggt historische Daten und liefert ein komplett offline-fähiges Web-Dashboard.
 
@@ -34,7 +34,7 @@ Die vollständige GPIO-Belegung steht in `src/config.h` (P-SW03 im Lastenheft).
 - **RGB-Status-LED** zeigt BMS-/MPPT-Fehler, SoC, Landstrom und alle Aktoren gleichzeitig in einem Rundlauf-Muster an
 - **JK-BMS-Anbindung wahlweise über UART-TTL (GPS-Port) oder CAN** (Compile-Zeit-Umschaltung, identischer Datenoutput)
 - **Elektronische Wasserwaage** (optional, MMA8452Q): Neigungsmessung (Roll/Pitch), automatische Keilhöhen-Berechnung pro Rad, eigener Dashboard-Tab mit Libellen-Anzeige und Kalibrierung
-- **Multi-SSID Heim-WLAN** (v5.5.1): bis zu 3 Heimnetze speicherbar — das Modul verbindet sich per Scan mit dem stärksten bekannten Netz, AP bleibt parallel aktiv. Rescan-Backoff bis 15 Min und Scan-Aufschub bei verbundenen AP-Clients (v5.6.6) verhindern, dass minütliche Aktiv-Scans ohne erreichbares Heimnetz das Dashboard über den AP stören
+- **Multi-SSID Heim-WLAN** (v5.5.1): bis zu 3 Heimnetze speicherbar — das Modul verbindet sich per Scan mit dem stärksten bekannten Netz, AP bleibt parallel aktiv. Rescan-Backoff bis 15 Min und Scan-Aufschub bei verbundenen AP-Clients (v5.6.6) verhindern, dass minütliche Aktiv-Scans ohne erreichbares Heimnetz das Dashboard über den AP stören. Seit v5.6.7 setzt das Modul zusätzlich seinen DHCP-Hostname auf `womo`, sodass es im Heimrouter (FRITZ!Box) unter diesem Namen statt als anonymes espressif-Gerät erscheint
 - **mDNS + NTP** (v5.5.2): Dashboard ohne IP unter `http://womo.local` erreichbar (AP wie Heimnetz); bei Heimnetz-Verbindung stellt sich die Uhr automatisch per NTP — der Browser-Sync bleibt als Fallback im AP-Betrieb erhalten. Der letzte NTP-Sync wird im Zeitzone-Tab angezeigt (v5.5.3)
 - **Schaltkriterien v5.5**: D+/Gel schalten nur noch über harte Bedingungen ab (Landstrom, BMS ungültig, SoC-Schwelle) — MPPT-Ausfälle und PV-Einbrüche schalten nichts mehr ab; EIN bei genug PV **oder** MPPT-Float. Wechselrichter: Einschalten nur manuell, Automatik nur als Schutz-Abschaltung. Manuelles AUS ist dauerhaft und reboot-fest (NVS)
 - **Web-OTA** (v5.4.1): Firmware- und Dashboard-Updates direkt aus dem Browser (System-Tab), ohne PC/USB — Dual-App-Partitionslayout, Upload mit Fortschrittsanzeige, automatischer Neustart mit Ringpuffer-Sicherung

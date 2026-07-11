@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     index.html — Womo Energy Core v5.6.5
+     index.html — Womo Energy Core v5.6.7
      Dashboard: BMS · MPPT · Schaltlogik · Logging · Parameter · Zeitzone
      Eingebettet in LittleFS, erreichbar via http://192.168.4.1
      WLAN AP: GODMODULE (Passwort: BM-hy678)
@@ -665,7 +665,11 @@ function render(D){
       nt.textContent="noch nicht synchronisiert";
     }
   }
-  renderLevel(D.level);
+  // v5.6.7: KEIN renderLevel(D.level) hier — der Live-Frame
+  // (build_live_json) führt kein level-Feld, D.level wäre immer
+  // undefined und lvResetView() ließe die Lage-Anzeige alle 2 s kurz
+  // in die Mitte/grau springen. Die Lage-Anzeige gehört ausschließlich
+  // dem 250-ms-Poll fetchLevel()/lvTimer (nur bei aktivem Lage-Tab).
 }
 function setSw(id,on){$(id).classList.toggle("on",!!on);}
 function setSeg(act,st){

@@ -1,6 +1,6 @@
 ╔══════════════════════════════════════════════════════════════════╗
 ║     LASTEN- UND PFLICHTENHEFT — SOFTWARE                        ║
-║     Womo Energy Core v5.6.6                                      ║
+║     Womo Energy Core v5.6.7                                      ║
 ║     Stand: Schaltkriterien-Redesign (nur harte AUS-Bedingungen, ║
 ║            Float-Erkennung, WR nur manuell EIN) + D+-Pegel-Fix  ║
 ║            (Active-HIGH) + Lagesensor Überkopf-Einbau/Fehler-   ║
@@ -13,6 +13,7 @@
 ║            + BLE-TX rc-geprüft + "level"-Kommando (v5.6.3)      ║
 ║            + BLE-Chunkgröße auf Android-512B-Limit (v5.6.4)     ║
 ║            + WLAN-Rescan-Backoff/AP-Schutz (v5.6.6)             ║
+║            + Lage-Flackern-Fix (WLAN) + DHCP-Hostname (v5.6.7)  ║
 ╚══════════════════════════════════════════════════════════════════╝
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -151,6 +152,10 @@ L-SW10 | WEBINTERFACE — ZUGANG  [GEÄNDERT v5.5.2]          [MUSS]
   STA-Verbindung erneut propagiert (Reannounce im ws_task, gleiche
   Kontext-Regel wie die WLAN-Rekonfiguration). Hostname: MDNS_HOSTNAME
   in config.h ("womo"). HTTP-Dienst auf WEBSERVER_PORT (80).
+  DHCP-Hostname (v5.6.7): WiFi.setHostname(MDNS_HOSTNAME) wird vor dem
+  STA-Start gesetzt, sodass die Zentrale im Heimrouter (FRITZ!Box) unter
+  dem Namen "womo" statt als anonymes espressif-Gerät erscheint (Impl.
+  P-SW12).
   Komplett offline-fähig — kein Internet erforderlich.
   Dashboard wird aus LittleFS (/index.html) geliefert.
   Heim-WLAN (STA, Dualmodus seit v5.1): parallel zum AP kann sich
@@ -762,8 +767,15 @@ P-SW12 | WEBSERVER-ARCHITEKTUR
   HARDWARE-HINWEIS: server.on()-API-Routen MÜSSEN vor serveStatic("/")
     registriert werden — sonst Fallthrough zu LittleFS, API-Aufrufe
     laufen ins Leere (404 statt JSON).
+  DHCP-HOSTNAME (v5.6.7): WiFi.setHostname(MDNS_HOSTNAME) in
+    webserver_init() ZWINGEND nach WiFi.mode(WIFI_AP_STA) (STA-netif
+    existiert erst dann) und vor dem ersten WiFi.begin() aus
+    wifi_apply_sta(). Der Name haftet am STA-netif und übersteht die
+    Reconnect-/Rescan-begin()s in wifi_tick(), da das netif im Betrieb
+    nicht neu angelegt wird (Mode bleibt AP_STA, disconnect() lässt es
+    bestehen) — ein einmaliges Setzen genügt, Core-2.x-konform.
 
-P-SW13 | DASHBOARD (data/index.html)  [GEÄNDERT v5.6.5]
+P-SW13 | DASHBOARD (data/index.html)  [GEÄNDERT v5.6.7]
   Technologie: Reines HTML5/CSS3/JavaScript, keine externen Libraries.
   Tabs: Live | Verlauf | System | Lage | Einstellungen
   Kopf: Verbindungsstatus, Echtzeit-Uhr (lokale Zeitzone, DST), SD-Status,
@@ -808,6 +820,16 @@ P-SW13 | DASHBOARD (data/index.html)  [GEÄNDERT v5.6.5]
       Achsen-Invertierung, Modul aktiv/inaktiv
     - Polling 4Hz (250ms) nur während Tab aktiv ist, sonst inaktiv
       (kein unnötiger I2C-Traffic im Hintergrund)
+    - v5.6.7 BUGFIX: Der Live-Frame-Renderpfad (render(), alle 2s)
+      ruft NICHT renderLevel() auf. Das Live-JSON (build_live_json,
+      P-SW12) führt kein level-Feld; ein Aufruf renderLevel(D.level)
+      übergab dort immer undefined → lvResetView() ließ die Anzeige
+      in WLAN alle 2s kurz in die Mitte springen, grau werden und die
+      Werte auf "–" fallen (der 250ms-Poll korrigierte es je sofort
+      wieder → sichtbares Flackern). Die Lage-Anzeige gehört allein
+      dem fetchLevel()/lvTimer-Poll; die verwaiste Zeile wurde
+      entfernt. Betraf nur WLAN (Live-WS aktiv); in der BLE-App kommt
+      Lage ausschließlich über das "level"-Kommando (P-SW21).
   Einstellungen-Tab:
     - Formular für alle 10 NVS-Parameter
     - Speichern → POST /api/params, Fabrik-Reset → POST /api/reset
