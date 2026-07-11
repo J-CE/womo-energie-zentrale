@@ -1,5 +1,5 @@
 // ============================================================
-//  bmscan.cpp — Womo Energy Core v5.4
+//  bmscan.cpp — Womo Energy Core v5.6.5
 //  JK-BMS CAN-Bus-Empfänger (TWAI), Alternative zu bms.cpp
 //
 //  Aktiv NUR wenn BMS_USE_CAN definiert ist (sonst leer übersetzt →
@@ -9,12 +9,24 @@
 //  Protokoll: JIKONG BMS-CAN V1.02 — CAN 2.0A, 250 kbit/s, Little-Endian,
 //             Push (zyklisch). Empfang im LISTEN_ONLY-Modus (kein ACK,
 //             keine Bus-Beeinflussung, kein zweiter Knoten nötig).
+//
+//  v5.6.5: Plausibilitätsprüfung analog bms.cpp (RS485-Variante) —
+//  BATT_ST/CELL_TEMP werden vor der Übernahme nach g_bms gegen die
+//  BMS_PLAUSIBLE_*-Grenzen (config.h) geprüft. ACHTUNG: Der eigentliche
+//  RS485-Bug (Framelänge/-ende erraten, dadurch Alt/Neu-Frame-Vermischung)
+//  betrifft CAN NICHT — der TWAI-Controller liefert bereits vollständige,
+//  hardware-CRC-geprüfte Frames fester Länge, es gibt keinen Byte-Strom
+//  zum Resynchronisieren. Die Plausibilitätsprüfung ist hier trotzdem als
+//  zweite, unabhängige Schutzschicht sinnvoll (Bus-Störungen, seltene
+//  undetektierte Mehrbit-Fehler) und hält den Datensatz konsistent mit
+//  der RS485-Variante.
 // ============================================================
 #ifdef BMS_USE_CAN
 
 #include "bmscan.h"
 #include "config.h"
 #include "driver/twai.h"
+#include <math.h>
 
 // ── Globale Symbole (identisch zu bms.cpp — nur eine .cpp im Build!) ──
 BMSData           g_bms      = {};
@@ -30,6 +42,23 @@ static void note_error() {
         g_bms.errorCount++;
         xSemaphoreGive(g_bmsMutex);
     }
+}
+
+// Plausibilitätsprüfung (v5.6.5) — analog values_plausible() in bms.cpp
+// (RS485-Variante), dieselben Grenzen (config.h BMS_PLAUSIBLE_*). Getrennt
+// nach Frame-Typ, da BATT_ST und CELL_TEMP unabhängig voneinander im CAN-Bus
+// eintreffen und auch unabhängig verworfen werden können.
+static bool batt_plausible(float v, float i, uint8_t soc) {
+    if (v < BMS_PLAUSIBLE_V_MIN || v > BMS_PLAUSIBLE_V_MAX) return false;
+    if (fabsf(i) > BMS_PLAUSIBLE_I_MAX_A)                   return false;
+    if (soc > 100)                                          return false;
+    return true;
+}
+static bool temp_plausible(float tMax, float tMin, float tAvg) {
+    if (tMax < BMS_PLAUSIBLE_T_MIN || tMax > BMS_PLAUSIBLE_T_MAX) return false;
+    if (tMin < BMS_PLAUSIBLE_T_MIN || tMin > BMS_PLAUSIBLE_T_MAX) return false;
+    if (tAvg < BMS_PLAUSIBLE_T_MIN || tAvg > BMS_PLAUSIBLE_T_MAX) return false;
+    return true;
 }
 
 // ── Init: TWAI-Treiber installieren und starten ──────────────
@@ -107,6 +136,23 @@ bool bms_poll() {
         note_error();
         return false;
     }
+
+    // v5.6.5: unplausible Werte NICHT übernehmen (Frame-Typ-getrennt) —
+    // g_bms bleibt für diesen Typ auf dem letzten guten Stand, statt
+    // Fantasiewerte als "gültig" zu führen. Symmetrisch zu bms.cpp.
+    if (gotBatt && !batt_plausible(volt, curr, soc)) {
+        Serial.printf("[BMSCAN] Unplausibler BATT_ST verworfen (V=%.2f I=%.2f SoC=%u)\n",
+                      volt, curr, soc);
+        note_error();
+        gotBatt = false;
+    }
+    if (gotTemp && !temp_plausible(tMax, tMin, tAvg)) {
+        Serial.printf("[BMSCAN] Unplausibler CELL_TEMP verworfen (max=%.1f min=%.1f avg=%.1f)\n",
+                      tMax, tMin, tAvg);
+        note_error();
+        gotTemp = false;
+    }
+    if (!gotBatt && !gotTemp) return false;           // beide Typen verworfen
 
     if (xSemaphoreTake(g_bmsMutex, pdMS_TO_TICKS(100)) != pdTRUE) return false;
 

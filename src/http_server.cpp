@@ -57,8 +57,10 @@ static AsyncWebSocket ws("/ws");
 // genau einem Netz: Direktverbindung wie bisher (kein Scan). Bewusst
 // KEINE Arduino-WiFiMulti-Klasse — deren blockierendes run() verträgt
 // sich nicht mit AP+STA-Dualmodus und unserer Reconnect-Strategie.
-#define WIFI_STA_SLOTS            3
-#define WIFI_RESCAN_INTERVAL_MS   60000     // Rescan-Backoff wenn getrennt
+#define WIFI_STA_SLOTS              3
+#define WIFI_RESCAN_INTERVAL_MS     60000    // Rescan-Backoff-Basis wenn getrennt
+#define WIFI_RESCAN_INTERVAL_MAX_MS 900000   // Backoff-Deckel: max. alle 15 Min (v5.6.6)
+#define WIFI_AP_SCAN_DEFER_MS       5000     // Scan-Aufschub, solange AP-Client(s) verbunden (v5.6.6)
 static Preferences  wprefs;
 static bool         s_staEnabled = false;   // mind. ein Slot konfiguriert?
 // POST setzt nur dieses Flag; die eigentliche WiFi-Rekonfiguration läuft
@@ -66,8 +68,12 @@ static bool         s_staEnabled = false;   // mind. ein Slot konfiguriert?
 static volatile bool s_wifiReapply = false;
 // Scan-Zustandsmaschine — ausschließlich ws_task schreibt/liest:
 enum StaScanState : uint8_t { STA_IDLE = 0, STA_SCANNING };
-static StaScanState s_staScan     = STA_IDLE;
-static uint32_t     s_staNextScan = 0;      // millis()-Marke für Rescan
+static StaScanState s_staScan          = STA_IDLE;
+static uint32_t     s_staNextScan      = 0;   // millis()-Marke für nächsten Rescan
+// v5.6.6: wächst bei erfolglosem Scan (kein bekanntes Netz gefunden) bis
+// WIFI_RESCAN_INTERVAL_MAX_MS, damit dauerhaft abwesende Heimnetze nicht
+// minütlich per Aktiv-Scan das AP-Radio stören (siehe wifi_tick()).
+static uint32_t     s_staRescanIntervalMs = WIFI_RESCAN_INTERVAL_MS;
 
 // ── mDNS / NTP (v5.5.2) ──────────────────────────────────────
 // on_wifi_event (WiFi-Event-Task) darf kein I2C/keine blockierenden Ops
@@ -138,15 +144,24 @@ static void wifi_apply_sta() {
         return;
     }
     // Mehrere Kandidaten → asynchroner Scan (AP bleibt aktiv).
+    // Neu-Konfiguration (Nutzer hat gerade gespeichert) setzt den Backoff
+    // zurück — der erste Scan nach einer Änderung soll nicht künstlich
+    // verzögert sein.
+    s_staRescanIntervalMs = WIFI_RESCAN_INTERVAL_MS;
     WiFi.scanDelete();
     WiFi.scanNetworks(true /*async*/, false /*keine Hidden-SSIDs*/);
     s_staScan     = STA_SCANNING;
-    s_staNextScan = millis() + WIFI_RESCAN_INTERVAL_MS;
+    s_staNextScan = millis() + s_staRescanIntervalMs;
     Serial.printf("[WEB] STA: %u Netze konfiguriert — Scan läuft ...\n", (unsigned)n);
 }
 
 // v5.5.1: Scan auswerten + Rescan-Backoff. NUR aus webserver_broadcast
 // (ws_task) aufrufen — gleiche Kontext-Regel wie wifi_apply_sta.
+// v5.6.6: Backoff wächst exponentiell (Basis WIFI_RESCAN_INTERVAL_MS,
+// Deckel WIFI_RESCAN_INTERVAL_MAX_MS) solange kein bekanntes Netz
+// gefunden wird, und der Scan wird zurückgestellt, solange AP-Clients
+// verbunden sind (Kanal-Scan stört sonst deren Verbindung — Symptom war
+// ein "instabiles WLAN", wenn dauerhaft kein Heimnetz erreichbar war).
 static void wifi_tick() {
     if (!s_staEnabled) return;
 
@@ -166,16 +181,28 @@ static void wifi_tick() {
             }
         }
         WiFi.scanDelete();
-        s_staScan     = STA_IDLE;
-        s_staNextScan = millis() + WIFI_RESCAN_INTERVAL_MS;
+        s_staScan = STA_IDLE;
         if (best >= 0) {
+            // Bekanntes Netz gefunden → Backoff zurücksetzen, damit ein
+            // späteres Verschwinden des Netzes wieder mit dem schnellen
+            // Basis-Intervall neu versucht wird.
+            s_staRescanIntervalMs = WIFI_RESCAN_INTERVAL_MS;
             WiFi.setAutoReconnect(true);
             WiFi.begin(bestSsid.c_str(), bestPass.c_str());
             Serial.printf("[WEB] STA: stärkstes bekanntes Netz \"%s\" (%d dBm, Slot %u)\n",
                           bestSsid.c_str(), (int)bestRssi, (unsigned)(best + 1));
         } else {
-            Serial.println("[WEB] STA: kein bekanntes Netz in Reichweite — Rescan in 60s");
+            // v5.6.6: kein bekanntes Netz in Reichweite → Backoff verdoppeln
+            // (Deckel WIFI_RESCAN_INTERVAL_MAX_MS). Verhindert, dass ein
+            // dauerhaft abwesendes Heimnetz das AP-Radio minütlich für den
+            // Kanal-Scan verlässt und damit verbundene Dashboard-Clients
+            // stört.
+            s_staRescanIntervalMs = min(s_staRescanIntervalMs * 2,
+                                         (uint32_t)WIFI_RESCAN_INTERVAL_MAX_MS);
+            Serial.printf("[WEB] STA: kein bekanntes Netz in Reichweite — nächster Scan in %us\n",
+                          (unsigned)(s_staRescanIntervalMs / 1000));
         }
+        s_staNextScan = millis() + s_staRescanIntervalMs;
         return;
     }
 
@@ -184,10 +211,20 @@ static void wifi_tick() {
     // das der Arduino-AutoReconnect wie bisher.
     if (!WiFi.isConnected() && slots_configured() > 1 &&
         (int32_t)(millis() - s_staNextScan) >= 0) {
+        // v5.6.6: Aktiver Scan zwingt das (einzige) Radio kurz vom
+        // AP-Kanal weg → verbundene AP-Clients (Dashboard/Handy) verlieren
+        // dabei kurz die Verbindung. Solange jemand am AP hängt, Scan
+        // zurückstellen statt die Session zu stören; Backoff-Timer bleibt
+        // dabei unverändert, es wird nur in kurzen Abständen erneut
+        // geprüft, ob der AP inzwischen wieder frei ist.
+        if (WiFi.softAPgetStationNum() > 0) {
+            s_staNextScan = millis() + WIFI_AP_SCAN_DEFER_MS;
+            return;
+        }
         WiFi.scanDelete();
         WiFi.scanNetworks(true, false);
         s_staScan     = STA_SCANNING;
-        s_staNextScan = millis() + WIFI_RESCAN_INTERVAL_MS;
+        s_staNextScan = millis() + s_staRescanIntervalMs;
     }
 }
 

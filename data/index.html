@@ -1,9 +1,13 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     index.html — Womo Energy Core v5.6.2
+     index.html — Womo Energy Core v5.6.5
      Dashboard: BMS · MPPT · Schaltlogik · Logging · Parameter · Zeitzone
      Eingebettet in LittleFS, erreichbar via http://192.168.4.1
      WLAN AP: GODMODULE (Passwort: BM-hy678)
+
+     v5.6.5: System-Status-Karte zeigt WLAN(STA)-Verbindung jetzt auch
+     bei BLE-Anbindung an (net.* kommt bereits transportunabhängig aus
+     build_live_json() — reine Anzeige-Ergänzung, kein Firmware-Bezug).
      ============================================================ -->
 <html lang="de">
 <head>
@@ -152,7 +156,7 @@
 <header>
   <div class="brand">
     <div class="logo">G</div>
-    <div><h1>GODMODULE · Energy Core</h1><div class="sub">Womo Energy Core v5.6.2</div></div>
+    <div><h1>GODMODULE · Energy Core</h1><div class="sub">Womo Energy Core v5.6.5</div></div>
   </div>
   <div class="pills">
     <span class="pill"><span id="dWs" class="dot"></span><span id="tWs">Verbinde…</span></span>
@@ -300,6 +304,7 @@
       <div class="card inv">
         <div class="ch"><h2>System-Status</h2><span class="badge">Diagnose</span></div>
         <div class="kv">
+          <span class="k">WLAN (STA)</span><span class="v" id="sWlan">–</span>
           <span class="k">Ringpuffer-Einträge</span><span class="v" id="sBuf">–</span>
           <span class="k">SD-Karte</span><span class="v" id="sSd">–</span>
           <span class="k">BMS Frames / Fehler</span><span class="v"><span id="sBfc">–</span> / <span id="sBec">–</span></span>
@@ -522,7 +527,7 @@
 </main>
 
 <div id="toast"></div>
-<div class="foot">GODMODULE · Energy Core v5.6.2 · WLAN: GODMODULE · http://192.168.4.1 · <span id="footTz">MEZ</span></div>
+<div class="foot">GODMODULE · Energy Core v5.6.5 · WLAN: GODMODULE · http://192.168.4.1 · <span id="footTz">MEZ</span></div>
 
 <script>
 "use strict";
@@ -640,11 +645,16 @@ function render(D){
     }
   }
   const net=D.net;const wn=$("wifiNow");
-  if(net&&wn){
-    wn.textContent = !net.sta_en ? "STA aus · reiner AP-Betrieb"
-      : net.sta ? `verbunden · ${net.ssid||"?"} · ${net.ip||"?"} · ${net.rssi||0} dBm`
-      : "gesucht · kein bekanntes Netz in Reichweite";
-  }
+  // net.* kommt identisch über WS UND BLE (build_live_json() liefert
+  // beide Kanäle aus derselben Quelle) — diese Anzeige funktioniert
+  // daher transportunabhängig, auch wenn das Dashboard per BLE-Bridge
+  // (ohne eigene WLAN-Verbindung des Endgeräts) geladen wurde.
+  const wlanTxt = !net ? "–"
+    : !net.sta_en ? "STA aus · reiner AP-Betrieb"
+    : net.sta ? `verbunden · ${net.ssid||"?"} · ${net.ip||"?"} · ${net.rssi||0} dBm`
+    : "gesucht · kein bekanntes Netz in Reichweite";
+  const sw=$("sWlan"); if(sw) sw.textContent = wlanTxt;
+  if(net&&wn){ wn.textContent = wlanTxt; }
   const nt=$("ntpNow");
   if(nt){
     if(net&&net.ntp>1704067200){
